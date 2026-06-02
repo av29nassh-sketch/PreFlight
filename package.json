@@ -1,0 +1,42 @@
+{
+  "name": "@preflight/scavenger",
+  "version": "0.1.0",
+  "description": "Local zero-knowledge deployment checker for Next.js and Supabase projects.",
+  "license": "BUSL-1.1",
+  "type": "commonjs",
+  "bin": {
+    "preflight": "./index.js",
+    "scavenger": "./index.js"
+  },
+  "scripts": {
+    "test": "vitest run --globals",
+    "scan": "node index.js",
+    "build:bin": "pkg . --out-path dist",
+    "build:bin:mac": "pkg . --targets node18-macos-x64,node18-macos-arm64 --no-bytecode --public --public-packages \"*\" --out-path dist",
+    "build:bin:win": "pkg . --targets node18-win-x64 --out-path dist"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.28.5",
+    "@babel/traverse": "^7.28.5",
+    "chalk": "^4.1.2",
+    "commander": "^12.1.0",
+    "fast-glob": "^3.3.3",
+    "pgsql-ast-parser": "^12.0.1",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1",
+    "vitest": "^4.0.15"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "pkg": {
+    "targets": [
+      "node18-macos-x64",
+      "node18-macos-arm64",
+      "node18-win-x64"
+    ],
+    "outputPath": "dist"
+  }
+}
