@@ -14,7 +14,7 @@ AI coding agents (Codex, Cursor, Copilot) are incredibly fast, but they consiste
 ## 🚀 The Free Scanner
 The PreFlight scanner runs 100% locally. It never uploads your code to the cloud. You can run it manually or drop it directly into your GitHub Actions CI/CD pipeline to block dangerous PRs.
 
-**Download the latest executable for your OS in the [Releases tab](#).**
+**Download the latest executable for your OS in the [Releases tab](https://github.com/av29nassh-sketch/PreFlight/releases/tag/v0.1.0).**
 
 ### Usage
 Scan a specific directory:
@@ -43,7 +43,7 @@ If the scanner catches a vulnerability, you don't have to fix it manually. The *
 
 No subscriptions. No cloud telemetry. 
 
-👉 **[Get notified when the Auto-Fix licenses go live this Friday!](#)**
+👉 **[Get notified when the Auto-Fix licenses go live this Friday!](https://github.com/av29nassh-sketch/PreFlight/issues/1)**
 *(Note: The Auto-Fix engine is currently in final beta, but the scanner is 100% free to use today).*
 
 ### Usage
