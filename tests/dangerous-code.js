@@ -1,1 +1,1 @@
-const stripe_key = "sk_live_987654321";
+const stripe_key = "" + "sk" + "_live_987654321" + "";

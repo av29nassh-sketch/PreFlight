@@ -3,3 +3,7 @@ node_modules/
 coverage/
 dist/
 *.log
+*.tgz
+demo-sandbox/
+test-sandbox/
+preflight.config.json

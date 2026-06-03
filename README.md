@@ -61,3 +61,19 @@ You can ignore specific mock folders or rules by adding a `preflight.config.json
   "ignoreRules": ["frontend-secret"]
 }
 ```
+
+---
+
+## Pricing & Beta Status
+
+PreFlight is currently in a 100% Free Beta while we battle-test the AI scanning and remediation workflow against real projects.
+
+The scanner is free to use during this beta, and unlimited auto-patching is also available for testing. In the future, unlimited auto-patching will become a paid feature. Final pricing is still TBD.
+
+---
+
+## Disclaimer & Liability
+
+This software is provided "AS IS", without warranties of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, and non-infringement.
+
+PreFlight may generate or suggest code patches using AI-assisted workflows. Users are solely responsible for reviewing, testing, and approving any AI-generated patches before deploying them to production or merging them into a codebase.

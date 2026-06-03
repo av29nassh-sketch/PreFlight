@@ -7,22 +7,130 @@ const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
 const { promisify } = require("node:util");
-const { parse: parseJavaScript } = require("@babel/parser");
-const traverse = require("@babel/traverse").default;
-const chalk = require("chalk");
+require("dotenv").config({ quiet: true });
 const { Command } = require("commander");
 const fg = require("fast-glob");
-const colors = require("picocolors");
 const { parse: parseSql } = require("pgsql-ast-parser");
+const ParserBinding = require("web-tree-sitter");
+const { colorize, createLogger } = require("./logger");
+const {
+  findSqlConcatenations,
+  generateParameterizedFix: generateSqlParameterizedFix
+} = require("./remediationEngine");
+const {
+  analyzeTaintGraph,
+  findTaintSources,
+  isClientComponent: isTreeClientComponent,
+  parseModuleBoundaries,
+  resolveImportPath
+} = require("./taintTracker");
+const {
+  applyScaffoldTransaction,
+  findServerSideLeaks
+} = require("./scaffoldEngine");
+const { activateLicenseKey: activateDefaultLicenseKey } = require("./src/licensing/licenseManager");
+const { startMcpServer: startDefaultMcpServer } = require("./src/mcp/server");
+const packageJson = require("./package.json");
 
 const execFileAsync = promisify(execFile);
+const TreeSitterParser = ParserBinding.Parser || ParserBinding.default?.Parser || ParserBinding.default || ParserBinding;
+const TreeSitterLanguage = ParserBinding.Language || ParserBinding.default?.Language;
 const PREFLIGHT_CONFIG_FILE = ".preflight-config.json";
 const PREFLIGHT_POLICY_FILE = "preflight.config.json";
 const LEMON_SQUEEZY_VALIDATE_URL = "https://api.lemonsqueezy.com/v1/licenses/validate";
+const PREFLIGHT_MCP_SERVER_NAME = "preflight-pro";
+const PREFLIGHT_MCP_SERVER_CONFIG = {
+  command: "npx",
+  args: ["preflight-pro", "mcp"]
+};
+const UNIVERSAL_MCP_OUTPUT = [
+  "=========================================",
+  "ðŸš€ PreFlight Pro MCP Ready",
+  "=========================================",
+  "For IDEs with a UI (Cursor, Windsurf, Zed):",
+  "1. Go to Settings -> MCP Servers",
+  "2. Click \"Add New\"",
+  "3. Name: PreFlight Pro",
+  "4. Type: command",
+  "5. Command: npx",
+  "6. Args: preflight-pro mcp",
+  "",
+  "Don't have a paid AI IDE? ",
+  "You can run this MCP completely free using open-source ",
+  "alternatives like OpenCode, RooCode (VS Code), or Cline. ",
+  "Just plug in the same npx command above!",
+  "========================================="
+].join("\n");
+const TREE_SITTER_WASM_PATHS = {
+  javascript: path.join(__dirname, "wasm", "tree-sitter-javascript.wasm"),
+  typescript: path.join(__dirname, "wasm", "tree-sitter-typescript.wasm"),
+  tsx: path.join(__dirname, "wasm", "tree-sitter-tsx.wasm")
+};
 const SOURCE_EXTENSIONS = ["js", "jsx", "ts", "tsx"];
 const SCAN_EXTENSIONS = new Set([...SOURCE_EXTENSIONS, "sql"]);
-const SECRET_VALUE_PATTERNS = [
-  /\bsk_(?:test|live)_[A-Za-z0-9_=-]{8,}\b/,
+const CREDENTIAL_PATTERNS = [
+  {
+    id: "aws-access-key-id",
+    label: "AWS Access Key ID",
+    regex: /\bAKIA[0-9A-Z]{16}\b/,
+    replacement: "process.env.AWS_ACCESS_KEY_ID"
+  },
+  {
+    id: "stripe-secret-key",
+    label: "Stripe Secret Key",
+    regex: /\bsk_(?:test|live)_[A-Za-z0-9_=-]{8,}\b/,
+    replacement: "process.env.STRIPE_SECRET_KEY"
+  },
+  {
+    id: "openai-api-key",
+    label: "OpenAI API Key",
+    regex: /\bsk-proj-[A-Za-z0-9_-]{20,}\b/,
+    replacement: "process.env.OPENAI_API_KEY"
+  },
+  {
+    id: "anthropic-api-key",
+    label: "Anthropic API Key",
+    regex: /\bsk-ant-(?:api03|oat01)-[A-Za-z0-9_-]{20,}\b/,
+    replacement: "process.env.ANTHROPIC_API_KEY"
+  },
+  {
+    id: "github-token",
+    label: "GitHub Personal Access Token",
+    regex: /\b(ghp|github_pat)_[a-zA-Z0-9]{36,}\b/,
+    replacement: "process.env.GITHUB_TOKEN"
+  },
+  {
+    id: "slack-token",
+    label: "Slack Bot/User Token",
+    regex: /\bxox[baprs]-[0-9]{10,13}-[a-zA-Z0-9]+\b/,
+    replacement: "process.env.SLACK_TOKEN"
+  },
+  {
+    id: "google-api-key",
+    label: "Google Cloud / Maps API Key",
+    regex: /\bAIza[0-9A-Za-z\-_]{35}\b/,
+    replacement: "process.env.GOOGLE_API_KEY"
+  },
+  {
+    id: "twilio-api-key",
+    label: "Twilio API Key",
+    regex: /\bSK[a-z0-9]{32}\b/,
+    replacement: "process.env.TWILIO_API_KEY"
+  },
+  {
+    id: "sendgrid-api-key",
+    label: "SendGrid API Key",
+    regex: /\bSG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}\b/,
+    replacement: "process.env.SENDGRID_API_KEY"
+  },
+  {
+    id: "postgres-uri",
+    label: "PostgreSQL Connection URI",
+    regex: /postgres:\/\/[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+@[a-zA-Z0-9_.-]+:[0-9]+\/[a-zA-Z0-9_-]+/,
+    replacement: "process.env.DATABASE_URL"
+  }
+];
+const SERVICE_ROLE_SECRET_PATTERNS = [
   /\bsupabase[_-]?service[_-]?role\b/i,
   /\bservice[_-]?role[_-]?key\b/i
 ];
@@ -86,6 +194,63 @@ const SARIF_RULES = {
       securitySeverity: "8.7",
       tags: ["security", "supabase", "rls"]
     }
+  },
+  "sql-injection": {
+    id: "sql-injection",
+    name: "Unsafe SQL string concatenation",
+    shortDescription: {
+      text: "SQL query text is built with JavaScript string concatenation."
+    },
+    fullDescription: {
+      text: "Concatenating user-controlled values into SQL text can allow SQL injection. Use parameterized queries."
+    },
+    helpUri: "https://preflight.local/rules/sql-injection",
+    defaultConfiguration: {
+      level: "error"
+    },
+    properties: {
+      precision: "high",
+      securitySeverity: "9.5",
+      tags: ["security", "sql-injection"]
+    }
+  },
+  "architectural-leak": {
+    id: "architectural-leak",
+    name: "Server-only code in client component",
+    shortDescription: {
+      text: "A Next.js client component executes server-only dependencies."
+    },
+    fullDescription: {
+      text: "Server-only modules such as fs, pg, and child_process should be moved behind a server action or backend route."
+    },
+    helpUri: "https://preflight.local/rules/architectural-leak",
+    defaultConfiguration: {
+      level: "error"
+    },
+    properties: {
+      precision: "high",
+      securitySeverity: "8.8",
+      tags: ["security", "nextjs", "architecture"]
+    }
+  },
+  "taint-violation": {
+    id: "taint-violation",
+    name: "Tainted secret crosses client boundary",
+    shortDescription: {
+      text: "A client component imports a value marked as a secret."
+    },
+    fullDescription: {
+      text: "Secrets and credential-shaped values should not flow into files marked with the Next.js use client directive."
+    },
+    helpUri: "https://preflight.local/rules/taint-violation",
+    defaultConfiguration: {
+      level: "error"
+    },
+    properties: {
+      precision: "high",
+      securitySeverity: "9.1",
+      tags: ["security", "nextjs", "taint"]
+    }
   }
 };
 
@@ -103,7 +268,7 @@ function normalizePolicy(policy = {}) {
 }
 
 async function loadPreflightPolicy(rootDir = process.cwd(), options = {}) {
-  const warn = options.warn || ((message) => console.warn(chalk.yellow(message)));
+  const warn = options.warn || ((message) => createLogger({ stderr: process.stderr }).warn(message));
   const configPath = path.join(path.resolve(rootDir), PREFLIGHT_POLICY_FILE);
   try {
     const raw = await fs.readFile(configPath, "utf8");
@@ -198,23 +363,155 @@ function hasUseClientDirective(source) {
   return statementPattern.test(withoutBom);
 }
 
-function parseSource(source, filePath) {
-  return parseJavaScript(source, {
-    sourceType: "unambiguous",
-    errorRecovery: true,
-    plugins: [
-      "jsx",
-      "typescript",
-      "decorators-legacy",
-      "classProperties",
-      "classPrivateProperties",
-      "classPrivateMethods",
-      "dynamicImport",
-      "importAttributes",
-      "topLevelAwait"
-    ],
-    sourceFilename: filePath
-  });
+let treeSitterReady;
+let treeSitterLanguages;
+
+async function initializeTreeSitterLanguages() {
+  if (!treeSitterReady) {
+    treeSitterReady = (async () => {
+      if (typeof TreeSitterParser.init === "function") {
+        await TreeSitterParser.init();
+      }
+
+      treeSitterLanguages = {
+        javascript: await TreeSitterLanguage.load(TREE_SITTER_WASM_PATHS.javascript),
+        typescript: await TreeSitterLanguage.load(TREE_SITTER_WASM_PATHS.typescript),
+        tsx: await TreeSitterLanguage.load(TREE_SITTER_WASM_PATHS.tsx)
+      };
+      return treeSitterLanguages;
+    })();
+  }
+
+  return treeSitterReady;
+}
+
+function getTreeSitterLanguageKeyForFile(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension === ".tsx") {
+    return "tsx";
+  }
+
+  if (extension === ".ts") {
+    return "typescript";
+  }
+
+  return "javascript";
+}
+
+async function parseWithRoutedTreeSitter(sourceCode, filePath) {
+  const languages = await initializeTreeSitterLanguages();
+  const parser = new TreeSitterParser();
+  parser.setLanguage(languages[getTreeSitterLanguageKeyForFile(filePath)]);
+  return parser.parse(sourceCode);
+}
+
+async function prepareSourceForScan(filePath, options = {}) {
+  const warn = options.warn || ((message) => createLogger({ stderr: process.stderr }).warn(message));
+  let sourceCode;
+
+  try {
+    sourceCode = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    warn(`Warning: could not scan ${filePath}: ${error.message}`);
+    return null;
+  }
+
+  try {
+    const tree = await parseWithRoutedTreeSitter(sourceCode, filePath);
+    tree.delete?.();
+  } catch (error) {
+    warn(`Warning: could not initialize parser for ${filePath}: ${error.message}`);
+    return null;
+  }
+
+  return sourceCode;
+}
+
+async function prepareParsedSourceForScan(filePath, options = {}) {
+  const sourceCode = await prepareSourceForScan(filePath, options);
+  if (sourceCode === null) {
+    return null;
+  }
+
+  try {
+    return {
+      sourceCode,
+      tree: await parseWithRoutedTreeSitter(sourceCode, filePath)
+    };
+  } catch (error) {
+    const warn = options.warn || ((message) => createLogger({ stderr: process.stderr }).warn(message));
+    warn(`Warning: could not initialize parser for ${filePath}: ${error.message}`);
+    return null;
+  }
+}
+
+function textFromByteRange(sourceCode, startIndex, endIndex) {
+  return Buffer.from(sourceCode, "utf8").subarray(startIndex, endIndex).toString("utf8");
+}
+
+function textFromNode(sourceCode, node) {
+  return sourceCode.slice(node.startIndex, node.endIndex);
+}
+
+function byteIndexFromStringIndex(sourceCode, stringIndex) {
+  return Buffer.byteLength(sourceCode.slice(0, stringIndex), "utf8");
+}
+
+function lineFromByteIndex(sourceCode, byteIndex) {
+  return textFromByteRange(sourceCode, 0, byteIndex).split(/\r?\n/).length;
+}
+
+function lineFromStringIndex(sourceCode, stringIndex) {
+  return sourceCode.slice(0, stringIndex).split(/\r?\n/).length;
+}
+
+function treeContainsUnsafeNode(node) {
+  if (!node) {
+    return false;
+  }
+
+  const isMissing = typeof node.isMissing === "function" ? node.isMissing() : node.isMissing === true;
+  if (node.type === "ERROR" || node.type === "MISSING" || isMissing) {
+    return true;
+  }
+
+  for (let index = 0; index < node.childCount; index += 1) {
+    if (treeContainsUnsafeNode(node.child(index))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function assertSourceSyntaxSafe(filePath, sourceCode) {
+  const tree = await parseWithRoutedTreeSitter(sourceCode, filePath);
+  try {
+    if (treeContainsUnsafeNode(tree.rootNode)) {
+      throw new Error(`Remediation Context Violation: ${filePath}`);
+    }
+  } finally {
+    tree.delete?.();
+  }
+}
+
+function unquoteTreeString(rawString) {
+  return rawString.trim().replace(/^['"`]|['"`]$/g, "");
+}
+
+function walkTree(node, visitor) {
+  if (!node) {
+    return;
+  }
+
+  visitor(node);
+  for (let index = 0; index < node.childCount; index += 1) {
+    walkTree(node.child(index), visitor);
+  }
+}
+
+function childForField(node, fieldName) {
+  return typeof node.childForFieldName === "function" ? node.childForFieldName(fieldName) : null;
 }
 
 function detectSecret(value) {
@@ -222,9 +519,14 @@ function detectSecret(value) {
     return null;
   }
 
-  const directMatch = SECRET_VALUE_PATTERNS.find((pattern) => pattern.test(value));
-  if (directMatch) {
-    return directMatch.source;
+  const credential = detectCredential(value);
+  if (credential) {
+    return credential.label;
+  }
+
+  const serviceRoleMatch = SERVICE_ROLE_SECRET_PATTERNS.find((pattern) => pattern.test(value));
+  if (serviceRoleMatch) {
+    return serviceRoleMatch.source;
   }
 
   const jwtRole = decodeSupabaseJwtRole(value);
@@ -233,6 +535,14 @@ function detectSecret(value) {
   }
 
   return null;
+}
+
+function detectCredential(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  return CREDENTIAL_PATTERNS.find((pattern) => pattern.regex.test(value)) || null;
 }
 
 function detectDatabaseUrl(value) {
@@ -252,35 +562,7 @@ function decodeSupabaseJwtRole(value) {
   }
 }
 
-function getEnvKey(node) {
-  if (!node || node.type !== "MemberExpression") {
-    return null;
-  }
-
-  const object = node.object;
-  if (
-    !object ||
-    object.type !== "MemberExpression" ||
-    object.object?.type !== "Identifier" ||
-    object.object.name !== "process" ||
-    object.property?.type !== "Identifier" ||
-    object.property.name !== "env"
-  ) {
-    return null;
-  }
-
-  if (node.property.type === "Identifier") {
-    return node.property.name;
-  }
-
-  if (node.property.type === "StringLiteral") {
-    return node.property.value;
-  }
-
-  return null;
-}
-
-function finding({ ruleId, severity, filePath, line, message, evidence, tableName }) {
+function finding({ ruleId, severity, filePath, line, message, evidence, tableName, fix, ...extra }) {
   return {
     ruleId,
     severity,
@@ -288,7 +570,9 @@ function finding({ ruleId, severity, filePath, line, message, evidence, tableNam
     line,
     message,
     ...(evidence ? { evidence } : {}),
-    ...(tableName ? { tableName } : {})
+    ...(tableName ? { tableName } : {}),
+    ...(fix ? { fix } : {}),
+    ...extra
   };
 }
 
@@ -431,53 +715,77 @@ function frontendSecretMessage(requireClientComponent) {
   return "Potential secret exposed in scanned JavaScript/TypeScript source.";
 }
 
-function getMemberExpressionName(node) {
-  if (!node || node.type !== "MemberExpression") {
-    return null;
-  }
-
-  const propertyName =
-    node.property?.type === "Identifier"
-      ? node.property.name
-      : node.property?.type === "StringLiteral"
-        ? node.property.value
-        : null;
-
-  if (!propertyName) {
-    return null;
-  }
-
-  if (node.object?.type === "Identifier") {
-    return `${node.object.name}.${propertyName}`;
-  }
-
-  return propertyName;
+function getCredentialFix(sourceCode, node, credential) {
+  const rawString = textFromNode(sourceCode, node);
+  return {
+    kind: "credential",
+    credentialId: credential.id,
+    replacement: credential.replacement,
+    expectedText: rawString,
+    startByte: byteIndexFromStringIndex(sourceCode, node.startIndex),
+    endByte: byteIndexFromStringIndex(sourceCode, node.endIndex)
+  };
 }
 
-function isJwtSecretCall(node) {
-  if (!node || node.type !== "CallExpression") {
-    return false;
+function scanCredentialStrings({ filePath, relativePath, sourceCode, tree, requireClientComponent }) {
+  if (!isSourceFile(filePath)) {
+    return [];
   }
 
-  const calleeName =
-    node.callee?.type === "Identifier" ? node.callee.name : getMemberExpressionName(node.callee);
-
-  return calleeName === "jwt.sign" || calleeName === "jwt.verify" || calleeName === "sign" || calleeName === "verify";
-}
-
-function isHardcodedStringNode(node) {
-  return node?.type === "StringLiteral" || node?.type === "TemplateLiteral" && node.expressions.length === 0;
-}
-
-function getStringNodeLine(node) {
-  if (node?.type === "TemplateLiteral") {
-    return node.quasis[0]?.loc?.start?.line || node.loc?.start?.line || 1;
+  if (requireClientComponent && !isClientComponent(relativePath, sourceCode)) {
+    return [];
   }
 
-  return node?.loc?.start?.line || 1;
+  const findings = [];
+  walkTree(tree.rootNode, (node) => {
+    if (node.type === "string") {
+      const rawString = textFromNode(sourceCode, node);
+      const innerString = unquoteTreeString(rawString);
+      const credential = detectCredential(innerString);
+      const secretEvidence = credential?.label || detectSecret(innerString);
+      if (!secretEvidence) {
+        return;
+      }
+
+      findings.push(
+        finding({
+          ruleId: "frontend-secret",
+          severity: "critical",
+          filePath,
+          line: lineFromStringIndex(sourceCode, node.startIndex),
+          message: frontendSecretMessage(requireClientComponent),
+          evidence: secretEvidence,
+          fix: credential ? getCredentialFix(sourceCode, node, credential) : undefined
+        })
+      );
+      return;
+    }
+
+    if (node.type !== "identifier" && node.type !== "property_identifier") {
+      return;
+    }
+
+    const identifier = textFromNode(sourceCode, node);
+    if (!SERVICE_ROLE_NAME_PATTERN.test(identifier)) {
+      return;
+    }
+
+    findings.push(
+      finding({
+        ruleId: "frontend-secret",
+        severity: "critical",
+        filePath,
+        line: lineFromStringIndex(sourceCode, node.startIndex),
+        message: frontendSecretMessage(requireClientComponent),
+        evidence: "Supabase service role reference"
+      })
+    );
+  });
+
+  return dedupeFindings(findings);
 }
 
-function scanBackendSource({ filePath, relativePath, source, includeStandaloneBackend }) {
+function scanBackendStrings({ filePath, relativePath, sourceCode, tree, includeStandaloneBackend }) {
   if (!isSourceFile(filePath)) {
     return [];
   }
@@ -486,139 +794,204 @@ function scanBackendSource({ filePath, relativePath, source, includeStandaloneBa
     return [];
   }
 
-  let ast;
-  try {
-    ast = parseSource(source, filePath);
-  } catch (error) {
-    return [
-      finding({
-        ruleId: "parse-error",
-        severity: "warning",
-        filePath,
-        line: error.loc?.line || 1,
-        message: `Could not parse source file: ${error.message}`
-      })
-    ];
-  }
-
   const findings = [];
+  walkTree(tree.rootNode, (node) => {
+    if (node.type === "call_expression") {
+      const callText = textFromNode(sourceCode, node);
+      const jwtMatch = callText.match(/\bjwt\.(sign|verify)\s*\([^,]+,\s*(["'`])[^"'`]+\2/);
+      if (jwtMatch) {
+        findings.push(
+          finding({
+            ruleId: "backend-secret",
+            severity: "critical",
+            filePath,
+            line: lineFromStringIndex(sourceCode, node.startIndex),
+            message: "JWT signing or verification uses a hardcoded secret.",
+            evidence: `jwt.${jwtMatch[1]} hardcoded secret`
+          })
+        );
+      }
+      return;
+    }
 
-  function addBackendSecret(node, evidence, message) {
+    if (node.type !== "string") {
+      return;
+    }
+
+    const rawString = textFromNode(sourceCode, node);
+    const innerString = unquoteTreeString(rawString);
+    if (detectCredential(innerString)?.id === "postgres-uri") {
+      return;
+    }
+
+    const match = detectDatabaseUrl(innerString);
+    if (!match) {
+      return;
+    }
+
     findings.push(
       finding({
         ruleId: "backend-secret",
         severity: "critical",
         filePath,
-        line: getStringNodeLine(node),
-        message,
-        evidence
+        line: lineFromStringIndex(sourceCode, node.startIndex),
+        message: "Raw backend database connection string is hardcoded in source.",
+        evidence: match
       })
     );
-  }
-
-  traverse(ast, {
-    StringLiteral({ node }) {
-      const match = detectDatabaseUrl(node.value);
-      if (match) {
-        addBackendSecret(node, match, "Raw backend database connection string is hardcoded in source.");
-      }
-    },
-    TemplateElement({ node }) {
-      const match = detectDatabaseUrl(node.value.cooked || node.value.raw);
-      if (match) {
-        addBackendSecret(node, match, "Raw backend database connection string is hardcoded in source.");
-      }
-    },
-    CallExpression({ node }) {
-      if (!isJwtSecretCall(node)) {
-        return;
-      }
-
-      const secretArg = node.arguments[1];
-      if (isHardcodedStringNode(secretArg)) {
-        const calleeName = node.callee?.type === "Identifier" ? node.callee.name : getMemberExpressionName(node.callee);
-        addBackendSecret(
-          secretArg,
-          `${calleeName} hardcoded secret`,
-          "JWT signing or verification secret is hardcoded instead of using process.env."
-        );
-      }
-    }
   });
 
   return dedupeFindings(findings);
 }
 
-function scanSecretSource({ filePath, relativePath, source, requireClientComponent }) {
-  if (!isSourceFile(filePath)) {
-    return [];
-  }
+function scanBackendSource() {
+  return [];
+}
 
-  if (requireClientComponent && (!isInsideNextFrontend(relativePath) || !isClientComponent(relativePath, source))) {
-    return [];
-  }
+function scanSecretSource() {
+  return [];
+}
 
-  let ast;
-  try {
-    ast = parseSource(source, filePath);
-  } catch (error) {
-    return [
-      finding({
-        ruleId: "parse-error",
-        severity: "warning",
-        filePath,
-        line: error.loc?.line || 1,
-        message: `Could not parse source file: ${error.message}`
-      })
-    ];
-  }
+function scanFrontendSource() {
+  return [];
+}
 
-  const findings = [];
+async function collectSourceFiles(rootDir, options = {}) {
+  const resolvedRoot = path.resolve(rootDir);
+  const policy = options.policy || normalizePolicy();
+  const relativePaths = await fg(["**/*.{js,jsx,ts,tsx}"], {
+    cwd: resolvedRoot,
+    absolute: false,
+    dot: false,
+    ignore: ["**/*.d.ts", "**/node_modules/**", "**/.next/**", "**/dist/**", "**/coverage/**"]
+  });
 
-  function addFrontendSecret(node, evidence) {
-    findings.push(
-      finding({
-        ruleId: "frontend-secret",
-        severity: "critical",
-        filePath,
-        line: node.loc?.start?.line || 1,
-        message: frontendSecretMessage(requireClientComponent),
-        evidence
-      })
-    );
-  }
+  return relativePaths
+    .filter((relativePath) => !isIgnoredPath(relativePath, policy))
+    .map((relativePath) => ({
+      filePath: path.join(resolvedRoot, relativePath),
+      relativePath: toPosix(relativePath)
+    }))
+    .sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
 
-  traverse(ast, {
-    StringLiteral({ node }) {
-      const match = detectSecret(node.value);
-      if (match) {
-        addFrontendSecret(node, match);
-      }
-    },
-    TemplateElement({ node }) {
-      const match = detectSecret(node.value.cooked || node.value.raw);
-      if (match) {
-        addFrontendSecret(node, match);
-      }
-    },
-    MemberExpression({ node }) {
-      const envKey = getEnvKey(node);
-      if (envKey && SERVICE_ROLE_NAME_PATTERN.test(envKey)) {
-        addFrontendSecret(node, `process.env.${envKey}`);
-      }
-    },
-    Identifier({ node }) {
-      if (SERVICE_ROLE_NAME_PATTERN.test(node.name)) {
-        addFrontendSecret(node, node.name);
+function collectImportLineMap(tree, sourceCode) {
+  const importLines = new Map();
+
+  walkTree(tree.rootNode, (node) => {
+    if (node.type !== "import_statement") {
+      return;
+    }
+
+    const text = textFromNode(sourceCode, node);
+    for (const match of text.matchAll(/\b([A-Za-z_$][\w$]*)\b/g)) {
+      if (!importLines.has(match[1])) {
+        importLines.set(match[1], lineFromStringIndex(sourceCode, node.startIndex));
       }
     }
   });
 
-  return dedupeFindings(findings);
+  return importLines;
 }
 
-function scanFrontendSource({ filePath, relativePath, source }) {
-  return scanSecretSource({ filePath, relativePath, source, requireClientComponent: true });
+function credentialRegexesForTaint() {
+  return CREDENTIAL_PATTERNS.map((pattern) => new RegExp(pattern.regex.source, pattern.regex.flags));
+}
+
+function buildProjectGraphNode(filePath, sourceCode, tree) {
+  const boundaries = parseModuleBoundaries(tree.rootNode, sourceCode);
+  return {
+    isClient: isTreeClientComponent(tree.rootNode, sourceCode),
+    taintedSources: findTaintSources(tree.rootNode, sourceCode, credentialRegexesForTaint()),
+    imports: boundaries.imports.map((item) => ({
+      ...item,
+      source: resolveImportPath(filePath, item.source) || item.source
+    })),
+    reExports: (boundaries.reExports || []).map((item) => ({
+      ...item,
+      source: resolveImportPath(filePath, item.source) || item.source
+    })),
+    exports: boundaries.exports
+  };
+}
+
+function scanSqlConcatenationFindings({ filePath, sourceCode, tree }) {
+  return findSqlConcatenations(tree.rootNode, sourceCode).map((match) =>
+    finding({
+      ruleId: "sql-injection",
+      severity: "critical",
+      filePath,
+      line: lineFromByteIndex(sourceCode, match.startIndex),
+      message: "SQL query is built through string concatenation instead of parameter binding.",
+      evidence: match.rawSnippet,
+      fix: {
+        kind: "sql-remediation",
+        startByte: match.startIndex,
+        endByte: match.endIndex,
+        expectedText: match.rawSnippet,
+        rawSnippet: match.rawSnippet
+      }
+    })
+  );
+}
+
+function scanArchitecturalLeakFindings({ filePath, sourceCode, tree }) {
+  return findServerSideLeaks(tree.rootNode, sourceCode).map((leak) =>
+    finding({
+      ruleId: "architectural-leak",
+      severity: "high",
+      filePath,
+      line: lineFromByteIndex(sourceCode, leak.startIndex),
+      message: "Client component executes server-only code that should move behind a server action.",
+      evidence: leak.functionName,
+      fix: {
+        kind: "scaffold-server-action",
+        leak
+      }
+    })
+  );
+}
+
+function scanParsedSourceFile({ filePath, relativePath, sourceCode, tree }) {
+  const credentialRequiresClient =
+    isInsideNextFrontend(relativePath) && !isBackendApiRoute(relativePath);
+
+  return [
+    ...scanCredentialStrings({
+      filePath,
+      relativePath,
+      sourceCode,
+      tree,
+      requireClientComponent: credentialRequiresClient
+    }),
+    ...scanBackendStrings({
+      filePath,
+      relativePath,
+      sourceCode,
+      tree,
+      includeStandaloneBackend: true
+    }),
+    ...scanSqlConcatenationFindings({ filePath, sourceCode, tree }),
+    ...scanArchitecturalLeakFindings({ filePath, sourceCode, tree })
+  ];
+}
+
+function taintViolationsToFindings(violations, parsedFiles) {
+  return violations.map((violation) => {
+    const parsed = parsedFiles.get(violation.leakedFile);
+    const line = parsed?.importLines.get(violation.variable) || 1;
+    return finding({
+      ruleId: "taint-violation",
+      severity: "critical",
+      filePath: violation.leakedFile,
+      line,
+      message: `Client component imports tainted value ${violation.variable}.`,
+      evidence: `from ${violation.sourceFile}`,
+      variable: violation.variable,
+      sourceFile: violation.sourceFile,
+      leakedFile: violation.leakedFile
+    });
+  });
 }
 
 function dedupeFindings(findings) {
@@ -651,8 +1024,21 @@ async function scanFrontendSecrets(rootDir, options = {}) {
     }
 
     const filePath = path.join(rootDir, relativePath);
-    const source = await fs.readFile(filePath, "utf8");
-    results.push(...scanFrontendSource({ filePath, relativePath, source }));
+    const parsed = await prepareParsedSourceForScan(filePath, { warn: options.warn });
+    if (parsed === null) {
+      continue;
+    }
+    try {
+      results.push(...scanCredentialStrings({
+        filePath,
+        relativePath,
+        sourceCode: parsed.sourceCode,
+        tree: parsed.tree,
+        requireClientComponent: true
+      }));
+    } finally {
+      parsed.tree.delete?.();
+    }
   }
 
   return results;
@@ -675,8 +1061,21 @@ async function scanBackendSecrets(rootDir, options = {}) {
     }
 
     const filePath = path.join(rootDir, relativePath);
-    const source = await fs.readFile(filePath, "utf8");
-    results.push(...scanBackendSource({ filePath, relativePath, source, includeStandaloneBackend: false }));
+    const parsed = await prepareParsedSourceForScan(filePath, { warn: options.warn });
+    if (parsed === null) {
+      continue;
+    }
+    try {
+      results.push(...scanBackendStrings({
+        filePath,
+        relativePath,
+        sourceCode: parsed.sourceCode,
+        tree: parsed.tree,
+        includeStandaloneBackend: false
+      }));
+    } finally {
+      parsed.tree.delete?.();
+    }
   }
 
   return results;
@@ -690,6 +1089,7 @@ async function scanStandaloneSecrets(rootDir, options = {}) {
     dot: false,
     ignore: [
       "**/*.d.ts",
+      "{app,pages}/**",
       "**/node_modules/**",
       "**/.next/**",
       "**/dist/**",
@@ -705,9 +1105,28 @@ async function scanStandaloneSecrets(rootDir, options = {}) {
     }
 
     const filePath = path.join(rootDir, relativePath);
-    const source = await fs.readFile(filePath, "utf8");
-    results.push(...scanSecretSource({ filePath, relativePath, source, requireClientComponent: false }));
-    results.push(...scanBackendSource({ filePath, relativePath, source, includeStandaloneBackend: true }));
+    const parsed = await prepareParsedSourceForScan(filePath, { warn: options.warn });
+    if (parsed === null) {
+      continue;
+    }
+    try {
+      results.push(...scanCredentialStrings({
+        filePath,
+        relativePath,
+        sourceCode: parsed.sourceCode,
+        tree: parsed.tree,
+        requireClientComponent: false
+      }));
+      results.push(...scanBackendStrings({
+        filePath,
+        relativePath,
+        sourceCode: parsed.sourceCode,
+        tree: parsed.tree,
+        includeStandaloneBackend: true
+      }));
+    } finally {
+      parsed.tree.delete?.();
+    }
   }
 
   return results;
@@ -960,6 +1379,8 @@ async function scanFiles(rootDir, files, options = {}) {
   const resolvedRoot = path.resolve(rootDir);
   const policy = options.policy || normalizePolicy();
   const findings = [];
+  const projectGraph = {};
+  const parsedFiles = new Map();
 
   for (const file of files) {
     const filePath = file.filePath || path.join(resolvedRoot, file.relativePath);
@@ -968,30 +1389,42 @@ async function scanFiles(rootDir, files, options = {}) {
       continue;
     }
 
-    const source = await fs.readFile(filePath, "utf8");
-
     if (path.extname(filePath).toLowerCase() === ".sql") {
+      let source;
+      try {
+        source = await fs.readFile(filePath, "utf8");
+      } catch (error) {
+        const warn = options.warn || ((message) => createLogger({ stderr: process.stderr }).warn(message));
+        warn(`Warning: could not scan ${filePath}: ${error.message}`);
+        continue;
+      }
       findings.push(...scanSqlSource({ filePath, source }));
       continue;
     }
 
-    findings.push(
-      ...scanSecretSource({
+    const parsed = await prepareParsedSourceForScan(filePath, { warn: options.warn });
+    if (parsed === null) {
+      continue;
+    }
+
+    try {
+      parsedFiles.set(filePath, {
+        sourceCode: parsed.sourceCode,
+        importLines: collectImportLineMap(parsed.tree, parsed.sourceCode)
+      });
+      projectGraph[filePath] = buildProjectGraphNode(filePath, parsed.sourceCode, parsed.tree);
+      findings.push(...scanParsedSourceFile({
         filePath,
         relativePath,
-        source,
-        requireClientComponent: false
-      })
-    );
-    findings.push(
-      ...scanBackendSource({
-        filePath,
-        relativePath,
-        source,
-        includeStandaloneBackend: true
-      })
-    );
+        sourceCode: parsed.sourceCode,
+        tree: parsed.tree
+      }));
+    } finally {
+      parsed.tree.delete?.();
+    }
   }
+
+  findings.push(...taintViolationsToFindings(analyzeTaintGraph(projectGraph), parsedFiles));
 
   return applyPolicy(dedupeFindings(findings), policy, resolvedRoot).sort((a, b) => {
     if (a.filePath === b.filePath) {
@@ -1006,25 +1439,19 @@ async function scanProjectDiff(rootDir = process.cwd(), options = {}) {
   const resolvedRoot = path.resolve(rootDir);
   const policy = options.policy || normalizePolicy();
   const files = await getChangedScanFiles(resolvedRoot, { policy });
-  return scanFiles(resolvedRoot, files, { policy });
+  return scanFiles(resolvedRoot, files, { policy, warn: options.warn });
 }
 
 async function scanProject(rootDir = process.cwd(), options = {}) {
   const resolvedRoot = path.resolve(rootDir);
   const policy = options.policy || normalizePolicy();
-  const includeStandaloneSecrets = await shouldScanAsStandaloneSourceDirectory(resolvedRoot);
-  const [frontendFindings, backendFindings, standaloneFindings, migrationFindings] = await Promise.all([
-    scanFrontendSecrets(resolvedRoot, { policy }),
-    scanBackendSecrets(resolvedRoot, { policy }),
-    includeStandaloneSecrets ? scanStandaloneSecrets(resolvedRoot, { policy }) : Promise.resolve([]),
+  const [sourceFiles, migrationFindings] = await Promise.all([
+    collectSourceFiles(resolvedRoot, { policy }),
     scanSupabaseMigrations(resolvedRoot, { policy })
   ]);
+  const sourceFindings = await scanFiles(resolvedRoot, sourceFiles, { policy, warn: options.warn });
 
-  return applyPolicy(
-    [...frontendFindings, ...backendFindings, ...standaloneFindings, ...migrationFindings],
-    policy,
-    resolvedRoot
-  ).sort((a, b) => {
+  return applyPolicy([...sourceFindings, ...migrationFindings], policy, resolvedRoot).sort((a, b) => {
     if (a.filePath === b.filePath) {
       return a.line - b.line;
     }
@@ -1033,22 +1460,244 @@ async function scanProject(rootDir = process.cwd(), options = {}) {
   });
 }
 
+function askQuestion(question, options = {}) {
+  const input = options.input || process.stdin;
+  const output = options.output || process.stdout;
+  const interfaceHandle = readline.createInterface({ input, output });
+
+  return new Promise((resolve) => {
+    interfaceHandle.question(question, (answer) => {
+      interfaceHandle.close();
+      resolve(answer);
+    });
+  });
+}
+
+function questionWithInterface(interfaceHandle, question) {
+  return new Promise((resolve) => {
+    interfaceHandle.question(question, (answer) => {
+      resolve(answer || "");
+    });
+  });
+}
+
+async function readAllInput(input) {
+  let text = "";
+  input.setEncoding?.("utf8");
+
+  for await (const chunk of input) {
+    text += chunk;
+  }
+
+  return text;
+}
+
+async function createPromptOptions(options = {}) {
+  if (options.ask) {
+    return {
+      promptOptions: options,
+      close: () => {}
+    };
+  }
+
+  const input = options.input || process.stdin;
+  const output = options.output || process.stdout;
+
+  if (input.isTTY !== true) {
+    const answers = (await readAllInput(input)).split(/\r?\n/);
+    return {
+      promptOptions: {
+        ...options,
+        ask: async (question) => {
+          output.write(question);
+          return answers.shift() || "";
+        }
+      },
+      close: () => {}
+    };
+  }
+
+  const promptInterface = readline.createInterface({ input, output });
+  return {
+    promptOptions: { ...options, promptInterface },
+    close: () => promptInterface.close()
+  };
+}
+
+async function promptAndApplyFix(filePath, node, originalSourceBytes, options = {}) {
+  const replacementText = node.replacement;
+  const startByte = node.startByte;
+  const endByte = node.endByte;
+  const output = options.output || process.stdout;
+  const ask =
+    options.ask ||
+    (options.promptInterface
+      ? (question) => questionWithInterface(options.promptInterface, question)
+      : (question) => askQuestion(question, options));
+  const expectedText = node.expectedText;
+
+  if (typeof replacementText !== "string" || !replacementText) {
+    output.write(`Fix skipped because no replacement is configured for ${filePath}.\n`);
+    return originalSourceBytes;
+  }
+
+  if (
+    !Number.isInteger(startByte) ||
+    !Number.isInteger(endByte) ||
+    startByte < 0 ||
+    endByte <= startByte ||
+    endByte > originalSourceBytes.length
+  ) {
+    output.write(`Fix skipped because the stored byte range is invalid for ${filePath}.\n`);
+    return originalSourceBytes;
+  }
+
+  const leakedKey = originalSourceBytes.subarray(startByte, endByte).toString("utf8");
+
+  if (typeof expectedText !== "string" || leakedKey !== expectedText) {
+    output.write(`Fix skipped because the file changed after scanning: ${filePath}\n`);
+    return originalSourceBytes;
+  }
+
+  output.write(`\n[PREFLIGHT PRO] Vulnerability found in ${filePath}\n`);
+  output.write(`\u001b[91m(-) ${leakedKey}\u001b[0m\n`);
+  output.write(`\u001b[92m(+) ${replacementText}\u001b[0m\n`);
+
+  const confirm = await ask("\nApply this fix? (y/N): ");
+  if (confirm.toLowerCase() !== "y") {
+    output.write("Skipped.\n");
+    return originalSourceBytes;
+  }
+
+  const replacement = Buffer.from(replacementText, "utf8");
+  const newBytes = Buffer.concat([
+    originalSourceBytes.subarray(0, startByte),
+    replacement,
+    originalSourceBytes.subarray(endByte)
+  ]);
+
+  if (/^process\.env\.[A-Za-z_$][\w$]*$/.test(replacementText)) {
+    const envName = replacementText.replace(/^process\.env\./, "");
+    output.write(`Fix applied! Remember to add ${envName} to your .env file.\n`);
+  } else {
+    output.write("Fix applied!\n");
+  }
+  return newBytes;
+}
+
+function assertNonOverlappingFixes(fixes) {
+  const ordered = fixes.slice().sort((left, right) => left.startByte - right.startByte);
+  for (let index = 1; index < ordered.length; index += 1) {
+    const previous = ordered[index - 1];
+    const current = ordered[index];
+    if (current.startByte < previous.endByte) {
+      throw new Error(`Overlapping PreFlight fixes: ${previous.kind} intersects ${current.kind}`);
+    }
+  }
+}
+
+async function applyScanFixes(findings, options = {}) {
+  const fixesByFile = new Map();
+  const scaffoldFixes = [];
+  const generateParameterizedFix = options.generateParameterizedFix || generateSqlParameterizedFix;
+  let attempted = 0;
+  let applied = 0;
+  let skipped = 0;
+  let unsupported = 0;
+
+  for (const item of findings) {
+    if (!item.fix) {
+      unsupported += 1;
+      continue;
+    }
+
+    if (item.fix.kind === "scaffold-server-action") {
+      scaffoldFixes.push({ filePath: item.filePath, leak: item.fix.leak });
+      continue;
+    }
+
+    if (item.fix.kind !== "credential" && item.fix.kind !== "sql-remediation") {
+      unsupported += 1;
+      continue;
+    }
+
+    if (!fixesByFile.has(item.filePath)) {
+      fixesByFile.set(item.filePath, []);
+    }
+    fixesByFile.get(item.filePath).push({ finding: item, fix: item.fix });
+  }
+
+  const { promptOptions, close } = await createPromptOptions(options);
+
+  try {
+    for (const [filePath, fixes] of fixesByFile) {
+      let currentSourceBytes = await fs.readFile(filePath);
+      const resolvedFixes = [];
+
+      for (const { fix } of fixes) {
+        if (fix.kind === "sql-remediation") {
+          const replacement = await generateParameterizedFix(fix.rawSnippet);
+          resolvedFixes.push({
+            ...fix,
+            replacement
+          });
+          continue;
+        }
+
+        resolvedFixes.push(fix);
+      }
+
+      const sortedFixes = resolvedFixes
+        .slice()
+        .sort((left, right) => right.startByte - left.startByte);
+      assertNonOverlappingFixes(resolvedFixes);
+
+      for (const fix of sortedFixes) {
+        const before = currentSourceBytes;
+        currentSourceBytes = await promptAndApplyFix(filePath, fix, currentSourceBytes, promptOptions);
+        if (!Buffer.compare(before, currentSourceBytes)) {
+          skipped += 1;
+        } else {
+          applied += 1;
+        }
+        attempted += 1;
+      }
+
+      await assertSourceSyntaxSafe(filePath, currentSourceBytes.toString("utf8"));
+      await fs.writeFile(filePath, currentSourceBytes);
+    }
+
+    for (const item of scaffoldFixes) {
+      await applyScaffoldTransaction(item.filePath, item.leak);
+      attempted += 1;
+      applied += 1;
+    }
+  } finally {
+    close();
+  }
+
+  return { attempted, applied, skipped, unsupported };
+}
+
 function renderReport(findings, options = {}) {
-  const color = options.color !== false;
-  const c = color ? colors : new Proxy({}, { get: () => (value) => value });
+  const colorOptions = {
+    color: options.color,
+    noColor: options.noColor,
+    stream: options.stream || process.stdout
+  };
 
   if (findings.length === 0) {
-    return `${c.green("The Scavenger found 0 issues.")}\n`;
+    return `${colorize("success", "The Scavenger found 0 issues.", colorOptions)}\n`;
   }
 
   const plural = findings.length === 1 ? "issue" : "issues";
   const lines = [
-    c.red(`The Scavenger found ${findings.length} ${plural}.`),
+    colorize("error", `The Scavenger found ${findings.length} ${plural}.`, colorOptions),
     ""
   ];
 
   for (const item of findings) {
-    lines.push(`${c.bold(item.severity.toUpperCase())} ${c.cyan(item.ruleId)}`);
+    lines.push(`${colorize(item.severity, item.severity.toUpperCase(), colorOptions)} ${item.ruleId}`);
     lines.push(`  ${item.filePath}:${item.line}`);
     lines.push(`  ${item.message}`);
     if (item.evidence) {
@@ -1114,6 +1763,66 @@ async function writeSarifReport(findings, options = {}) {
   const outputPath = path.join(rootDir, SARIF_REPORT_NAME);
   await fs.writeFile(outputPath, `${JSON.stringify(renderSarif(findings, { rootDir }), null, 2)}\n`, "utf8");
   return outputPath;
+}
+
+async function auditDependencies(rootDir = process.cwd(), options = {}) {
+  const resolvedRoot = path.resolve(rootDir);
+  const runner = options.runner || runCommand;
+  try {
+    const result = await runner("npm", ["audit", "--json"], resolvedRoot);
+    return normalizeAuditResult(result.stdout, resolvedRoot);
+  } catch (error) {
+    const output = error.stdout || error.output || "";
+    if (output.trim()) {
+      return normalizeAuditResult(output, resolvedRoot);
+    }
+
+    throw error;
+  }
+}
+
+function normalizeAuditResult(rawJson, rootDir = process.cwd()) {
+  const parsed = JSON.parse(rawJson || "{}");
+  const vulnerabilities = parsed.metadata?.vulnerabilities || {
+    info: 0,
+    low: 0,
+    moderate: 0,
+    high: 0,
+    critical: 0,
+    total: 0
+  };
+
+  return {
+    directory: path.resolve(rootDir),
+    vulnerabilities,
+    metadata: parsed.metadata || {},
+    auditReportVersion: parsed.auditReportVersion,
+    raw: parsed
+  };
+}
+
+function renderAuditReport(result, options = {}) {
+  const colorOptions = {
+    color: options.color,
+    noColor: options.noColor,
+    stream: options.stream || process.stdout
+  };
+  const vulnerabilities = result.vulnerabilities || {};
+  const total = vulnerabilities.total || 0;
+
+  if (total === 0) {
+    return `${colorize("success", "PreFlight dependency audit found 0 vulnerabilities.", colorOptions)}\n`;
+  }
+
+  return [
+    colorize("error", `PreFlight dependency audit found ${total} vulnerabilities.`, colorOptions),
+    colorize("critical", `  Critical: ${vulnerabilities.critical || 0}`, colorOptions),
+    colorize("high", `  High: ${vulnerabilities.high || 0}`, colorOptions),
+    colorize("warning", `  Moderate: ${vulnerabilities.moderate || 0}`, colorOptions),
+    colorize("warning", `  Low: ${vulnerabilities.low || 0}`, colorOptions),
+    `  Info: ${vulnerabilities.info || 0}`,
+    ""
+  ].join("\n");
 }
 
 async function runCommand(command, args, cwd) {
@@ -1250,9 +1959,117 @@ async function applyFixWithRollback(options = {}) {
   }
 }
 
+function getMcpConfigTargets(options = {}) {
+  const platform = options.platform || process.platform;
+  const homeDir = options.homeDir || os.homedir();
+  const env = options.env || process.env;
+
+  if (platform === "win32") {
+    const appData = env.APPDATA || path.join(homeDir, "AppData", "Roaming");
+    return [
+      {
+        client: "Claude Desktop",
+        filePath: path.join(appData, "Claude", "claude_desktop_config.json")
+      },
+      {
+        client: "Cline for VS Code",
+        filePath: path.join(appData, "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "mcp_settings.json")
+      },
+      {
+        client: "RooCode for VS Code",
+        filePath: path.join(appData, "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings", "mcp_settings.json")
+      }
+    ];
+  }
+
+  if (platform === "darwin") {
+    const appSupport = path.join(homeDir, "Library", "Application Support");
+    return [
+      {
+        client: "Claude Desktop",
+        filePath: path.join(appSupport, "Claude", "claude_desktop_config.json")
+      },
+      {
+        client: "Cline for VS Code",
+        filePath: path.join(appSupport, "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "mcp_settings.json")
+      },
+      {
+        client: "RooCode for VS Code",
+        filePath: path.join(appSupport, "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings", "mcp_settings.json")
+      }
+    ];
+  }
+
+  const configHome = env.XDG_CONFIG_HOME || path.join(homeDir, ".config");
+  return [
+    {
+      client: "Claude Desktop",
+      filePath: path.join(configHome, "Claude", "claude_desktop_config.json")
+    },
+    {
+      client: "Cline for VS Code",
+      filePath: path.join(configHome, "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "mcp_settings.json")
+    },
+    {
+      client: "RooCode for VS Code",
+      filePath: path.join(configHome, "Code", "User", "globalStorage", "rooveterinaryinc.roo-cline", "settings", "mcp_settings.json")
+    }
+  ];
+}
+
+async function injectMcpServerConfig(target, options = {}) {
+  const serverName = options.serverName || PREFLIGHT_MCP_SERVER_NAME;
+  const serverConfig = options.serverConfig || PREFLIGHT_MCP_SERVER_CONFIG;
+  const raw = await fs.readFile(target.filePath, "utf8");
+  const config = raw.trim() ? JSON.parse(raw) : {};
+
+  if (!config.mcpServers || typeof config.mcpServers !== "object" || Array.isArray(config.mcpServers)) {
+    config.mcpServers = {};
+  }
+
+  config.mcpServers[serverName] = serverConfig;
+  await writeJsonFileSafely(target.filePath, config);
+  return target.client;
+}
+
+async function writeJsonFileSafely(filePath, value) {
+  const tempPath = `${filePath}.preflight-tmp`;
+  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await fs.rename(tempPath, filePath);
+}
+
+async function installMcpForKnownClients(options = {}) {
+  const targets = options.targets || getMcpConfigTargets(options);
+  const output = options.output || process.stdout;
+  const errorOutput = options.errorOutput || process.stderr;
+  const color = options.color !== false;
+  const configuredClients = [];
+
+  for (const target of targets) {
+    if (!(await fileExists(target.filePath))) {
+      continue;
+    }
+
+    try {
+      const client = await injectMcpServerConfig(target, options);
+      configuredClients.push(client);
+      output.write(`${colorize("success", "Configured", { color, stream: output })} ${client}: ${target.filePath}\n`);
+    } catch (error) {
+      errorOutput.write(`Warning: could not update ${target.client} MCP config at ${target.filePath}: ${error.message}\n`);
+    }
+  }
+
+  if (configuredClients.length > 0) {
+    output.write(`${colorize("success", "PreFlight Pro MCP auto-configured", { color, stream: output })} for ${configuredClients.join(", ")}.\n`);
+  }
+
+  output.write(`${UNIVERSAL_MCP_OUTPUT}\n`);
+  return configuredClients;
+}
+
 function normalizeCliArgs(argv) {
   const [nodePath, scriptPath, firstArg, ...rest] = argv;
-  const knownCommands = new Set(["scan", "apply-fix", "help"]);
+  const knownCommands = new Set(["scan", "audit", "activate", "apply-fix", "install-mcp", "mcp", "help"]);
 
   if (!firstArg || firstArg.startsWith("-") || !knownCommands.has(firstArg)) {
     return [nodePath, scriptPath, "scan", ...(firstArg ? [firstArg, ...rest] : rest)];
@@ -1261,12 +2078,72 @@ function normalizeCliArgs(argv) {
   return argv;
 }
 
-async function runCli(argv = process.argv) {
-  const normalizedArgv = normalizeCliArgs(argv);
+function applyOpenAiKeyFlag(argv = process.argv) {
+  const nextArgv = [];
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+
+    if (arg === "--openai-key") {
+      const value = argv[index + 1];
+      if (value && !value.startsWith("-")) {
+        process.env.OPENAI_API_KEY = value;
+        index += 1;
+      }
+      continue;
+    }
+
+    if (arg.startsWith("--openai-key=")) {
+      const value = arg.slice("--openai-key=".length);
+      if (value) {
+        process.env.OPENAI_API_KEY = value;
+      }
+      continue;
+    }
+
+    nextArgv.push(arg);
+  }
+
+  return nextArgv;
+}
+
+async function runCli(argv = process.argv, options = {}) {
+  const normalizedArgv = normalizeCliArgs(applyOpenAiKeyFlag(argv));
+  const activateLicenseKey = options.activateLicenseKey || activateDefaultLicenseKey;
+  const auditDependencyRunner = options.auditDependencies || auditDependencies;
+  const startMcpServer = options.startMcpServer || startDefaultMcpServer;
   const program = new Command();
   program
     .name("scavenger")
     .description("Local zero-knowledge scanner for Next.js and Supabase security flaws.");
+
+  program
+    .command("activate")
+    .description("Activate a PreFlight Pro Lemon Squeezy license key.")
+    .argument("<key>", "license key to activate")
+    .argument("[email]", "purchase email address")
+    .action(async (key, email) => {
+      if (!email) {
+        console.log(colorize("error", "\u274c Usage: preflight activate <key> <email>", { stream: process.stdout }));
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const result = await activateLicenseKey(key, email);
+        if (result.success === false) {
+          console.log(colorize("error", result.message, { stream: process.stdout }));
+          process.exitCode = 1;
+          return;
+        }
+
+        console.log(colorize("success", result.message || "\u2705 PreFlight Pro activated successfully! Unlimited AI auto-fixes unlocked.", { stream: process.stdout }));
+        process.exitCode = 0;
+      } catch (error) {
+        createLogger({ stderr: process.stderr }).error(`License activation failed: ${error.message}`);
+        process.exitCode = 1;
+      }
+    });
 
   program
     .command("apply-fix")
@@ -1279,11 +2156,11 @@ async function runCli(argv = process.argv) {
         await ensureLicenseVerified();
       } catch (error) {
         if (error instanceof InvalidLicenseKeyError) {
-          console.error(chalk.red("Invalid License Key"));
+          createLogger({ stderr: process.stderr }).error("Invalid License Key");
           process.exit(1);
         }
 
-        console.error(chalk.red(`License verification failed: ${error.message}`));
+        createLogger({ stderr: process.stderr }).error(`License verification failed: ${error.message}`);
         process.exit(1);
       }
 
@@ -1302,20 +2179,78 @@ async function runCli(argv = process.argv) {
       }
     });
 
+  program
+    .command("install-mcp")
+    .description("Auto-configure PreFlight Pro MCP for known local AI clients.")
+    .action(async () => {
+      await installMcpForKnownClients();
+      process.exitCode = 0;
+    });
+
+  program
+    .command("audit")
+    .description("Run an explicit dependency audit with npm audit.")
+    .argument("[directory]", "project directory to audit", process.cwd())
+    .option("--json", "print audit result as JSON")
+    .option("--no-color", "disable color output")
+    .action(async (directory, options) => {
+      const result = await auditDependencyRunner(path.resolve(directory));
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      } else {
+        process.stdout.write(renderAuditReport(result, { color: options.color, stream: process.stdout }));
+      }
+
+      process.exitCode = result.vulnerabilities?.total > 0 ? 1 : 0;
+    });
+
+  program
+    .command("mcp")
+    .description("Start the PreFlight MCP server over stdio.")
+    .action(async () => {
+      await startMcpServer({
+        applyScanFixes,
+        auditDependencies,
+        cwd: process.cwd(),
+        loadPreflightPolicy,
+        renderAuditReport,
+        renderReport,
+        scanProject,
+        scanProjectDiff,
+        version: packageJson.version
+      });
+      process.exitCode = 0;
+    });
+
   async function runScanAction(directory, options) {
     const rootDir = path.resolve(directory);
     const policy = await loadPreflightPolicy(process.cwd());
     const findings = options.diff ? await scanProjectDiff(rootDir, { policy }) : await scanProject(rootDir, { policy });
+    let fixResult = null;
 
-    if (options.format === "sarif") {
+    if (options.fix) {
+      fixResult = await applyScanFixes(findings);
+    }
+
+    if (options.fix) {
+      process.stdout.write(
+        `PreFlight remediation attempted ${fixResult?.attempted || 0} fix(es): ` +
+          `${fixResult?.applied || 0} applied, ${fixResult?.skipped || 0} skipped, ${fixResult?.unsupported || 0} unsupported.\n`
+      );
+    } else if (options.format === "sarif") {
       await writeSarifReport(findings, { rootDir });
     } else if (options.json) {
       process.stdout.write(`${JSON.stringify(findings, null, 2)}\n`);
     } else {
-      process.stdout.write(renderReport(findings, { color: options.color }));
+      process.stdout.write(renderReport(findings, { color: options.color, stream: process.stdout }));
     }
 
-    process.exit(findings.length > 0 ? 1 : 0);
+    if (options.fix) {
+      const unresolved = (fixResult?.skipped || 0) + (fixResult?.unsupported || 0);
+      process.exitCode = unresolved > 0 ? 1 : 0;
+    } else {
+      process.exitCode = findings.length > 0 ? 1 : 0;
+    }
   }
 
   program
@@ -1323,6 +2258,7 @@ async function runCli(argv = process.argv) {
     .description("Run the free local scanner.")
     .argument("[directory]", "project directory to scan", process.cwd())
     .option("--diff", "scan only changed Git files")
+    .option("--fix", "interactively remediate supported findings")
     .option("--format <format>", "output format: text or sarif", "text")
     .option("--json", "print findings as JSON")
     .option("--no-color", "disable color output")
@@ -1332,14 +2268,20 @@ async function runCli(argv = process.argv) {
 }
 
 module.exports = {
+  auditDependencies,
+  applyOpenAiKeyFlag,
+  applyScanFixes,
   applyFixWithRollback,
   detectSecret,
   ensureLicenseVerified,
   extractCreatedTables,
   extractRlsEnabledTables,
   getChangedScanFiles,
+  getMcpConfigTargets,
   getPreflightConfigPath,
   hasUseClientDirective,
+  injectMcpServerConfig,
+  installMcpForKnownClients,
   InvalidLicenseKeyError,
   isIgnoredPath,
   loadPreflightPolicy,
@@ -1347,10 +2289,13 @@ module.exports = {
   normalizeCliArgs,
   normalizePolicy,
   postFormUrlEncoded,
+  promptAndApplyFix,
   promptForLicenseKey,
   readPreflightConfig,
   renderReport,
+  renderAuditReport,
   renderSarif,
+  runCli,
   savePreflightConfig,
   scanBackendSecrets,
   scanBackendSource,
