@@ -37,14 +37,9 @@ preflight scan --diff --format=sarif
 ## 🛠️ The Auto-Fix Orchestrator (Pro)
 If the scanner catches a vulnerability, you don't have to fix it manually. The **Auto-Fix Orchestrator** will safely isolate the broken file in a Git branch and queue an auto-repair prompt directly to your IDE. 
 
-**Pricing:**
-* **Global License:** $49 (One-time lifetime access)
-* **India Localized License:** ₹1,999 (One-time lifetime access)
+The Auto-Fix workflow is currently included in the 100% Free Beta while we battle-test the scanner and patching engine against real projects. Unlimited auto-patching will eventually become a paid feature, but final pricing is TBD.
 
-No subscriptions. No cloud telemetry. 
-
-👉 **[Get notified when the Auto-Fix licenses go live this Friday!](https://github.com/av29nassh-sketch/PreFlight/issues/1)**
-*(Note: The Auto-Fix engine is currently in final beta, but the scanner is 100% free to use today).*
+No cloud telemetry. No source upload. Review every generated patch before deploying.
 
 ### Usage
 ```bash
