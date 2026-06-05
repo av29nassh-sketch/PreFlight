@@ -1,74 +1,97 @@
-# 🛫 PreFlight
+<div align="center">
 
-**The local security gate for AI-generated code.**
+# ✈️ PreFlight
 
-AI coding agents (Codex, Cursor, Copilot) are incredibly fast, but they consistently make catastrophic deployment mistakes. PreFlight is a zero-knowledge, local CLI tool that uses `tree-sitter` AST parsing to catch these hallucinations before they get merged into your codebase.
+<img src="demo.gif" alt="PreFlight Terminal Demo" width="800"/>
 
-### 🛡️ What it catches
-* **Frontend Leaks:** Hardcoded `sk_live_` keys in Next.js client components.
-* **Backend Leaks:** Exposed Database URLs and JWT secrets in `/api` routes.
-* **Open Databases:** Supabase migrations missing `ENABLE ROW LEVEL SECURITY`.
+**Stop AI Coding Drift. The local terminal guardrail that catches Cursor and Claude hallucinations before they leak your database.**
 
----
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![npm version](https://img.shields.io/npm/v/preflight-cli.svg)](https://www.npmjs.com/package/preflight-cli)
 
-## 🚀 The Free Scanner
-The PreFlight scanner runs 100% locally. It never uploads your code to the cloud. You can run it manually or drop it directly into your GitHub Actions CI/CD pipeline to block dangerous PRs.
+</div>
 
-**Download the latest executable for your OS in the [Releases tab](https://github.com/av29nassh-sketch/PreFlight/releases/tag/v0.1.0).**
+## The Problem
 
-### Usage
-Scan a specific directory:
+AI coding agents move at 100mph. Cursor, Claude, and other agentic coding tools can scaffold features in seconds, but they also silently introduce structural flaws that are easy to miss in review:
+
+- Row-Level Security gets stripped out or bypassed.
+- Frontend bundles receive hardcoded secrets.
+- Webhooks, auth checks, and tenant boundaries are left half-wired.
+- RPC wrappers and helper abstractions drift away from the security model you thought you had.
+
+PreFlight is the Shift-Left guardrail for that drift. It intercepts `git commit`, scans the staged diff locally, and blocks unsafe code before it lands in your repository.
+
+## Core Engine: The Tri-State Approach
+
+PreFlight does not pretend every issue is equally knowable from a local diff. The engine classifies every scan into one of three states:
+
+### 🔴 Confirmed Finding
+
+PreFlight hard blocks the commit on definitive issues such as exposed Stripe keys, hardcoded credentials, or raw SQL injection patterns.
+
+The free local engine can automatically redact confirmed secrets before they ever leave your machine.
+
+### 🟢 Likely Safe
+
+When the staged diff is clean, PreFlight passes the commit normally and prints a transparent receipt:
+
+```text
+🟢 Safe: Local syntax and basic guards verified.
+```
+
+### 🟡 Fuzzy Context Detected
+
+When the local AST engine hits a complex multi-file boundary such as an RPC wrapper, tenant helper, `supabase.auth` flow, or `createContext` abstraction it cannot fully resolve, PreFlight pauses the commit and prompts the developer to run:
+
 ```bash
-preflight scan ./my-project
+preflight upgrade
 ```
 
-Scan only files recently changed by an AI agent (Git Diff):
+That handoff unlocks the Cloud AI Engine for contextual patching and deep security tracing.
+
+## Quick Start (Free Local Engine)
+
+Install the CLI globally:
+
 ```bash
-preflight scan --diff
+npm install -g preflight-cli
 ```
 
-Block CI/CD pipelines with SARIF output:
+Initialize PreFlight inside your repository:
+
 ```bash
-preflight scan --diff --format=sarif
+preflight init
 ```
 
----
+This installs the safe `.git/hooks/pre-commit` script.
 
-## 🛠️ The Auto-Fix Orchestrator (Pro)
-If the scanner catches a vulnerability, you don't have to fix it manually. The **Auto-Fix Orchestrator** will safely isolate the broken file in a Git branch and queue an auto-repair prompt directly to your IDE. 
+Commit as usual:
 
-The Auto-Fix workflow is currently included in the 100% Free Beta while we battle-test the scanner and patching engine against real projects. Unlimited auto-patching will eventually become a paid feature, but final pricing is TBD.
-
-No cloud telemetry. No source upload. Review every generated patch before deploying.
-
-### Usage
 ```bash
-preflight apply-fix ./my-project
+git commit -m "feat: login route"
 ```
 
----
+PreFlight instantly steps in, scans the staged diff, and blocks the commit if it detects AI Coding Drift.
 
-## ⚙️ Configuration
-You can ignore specific mock folders or rules by adding a `preflight.config.json` file to your project root:
-```json
-{
-  "ignorePaths": ["tests", "mocks"],
-  "ignoreRules": ["frontend-secret"]
-}
-```
+## PreFlight Pro & Teams (Hybrid Architecture)
 
----
+PreFlight uses a Hybrid Router.
 
-## Pricing & Beta Status
+First, it checks your hardware. If your machine has enough CPU, RAM, and VRAM, PreFlight runs advanced local analysis natively. If not, only complex architectural scans are safely routed to the Cloud AI Engine for deeper reasoning.
 
-PreFlight is currently in a 100% Free Beta while we battle-test the AI scanning and remediation workflow against real projects.
+Your fast local guard stays free. The cloud path is reserved for the cases a regex or local AST pass cannot honestly prove.
 
-The scanner is free to use during this beta, and unlimited auto-patching is also available for testing. In the future, unlimited auto-patching will become a paid feature. Final pricing is still TBD.
+| Feature | Community (Free) | Pro ($19/mo) | Teams ($49/seat/mo) |
+| :--- | :--- | :--- | :--- |
+| Local AST Secret & Syntax Scans | ✅ | ✅ | ✅ |
+| Basic Auto-Fixes (Secrets/Redaction) | ✅ | ✅ | ✅ |
+| Cloud AI Logic Interception | ❌ | ✅ | ✅ |
+| Deep Architectural Auto-Patching | ❌ | ✅ | ✅ |
+| Plain-English QA Prompts | ❌ | ✅ | ✅ |
 
----
+## Closed Beta
 
-## Disclaimer & Liability
+🚀 **PreFlight Pro is currently in Closed Beta.**
 
-This software is provided "AS IS", without warranties of any kind, express or implied, including but not limited to warranties of merchantability, fitness for a particular purpose, and non-infringement.
-
-PreFlight may generate or suggest code patches using AI-assisted workflows. Users are solely responsible for reviewing, testing, and approving any AI-generated patches before deploying them to production or merging them into a codebase.
+Run `preflight upgrade` in your terminal or [click here to join the waitlist](https://waitlister.me/p/preflight) to secure early access to the Cloud AI Engine.

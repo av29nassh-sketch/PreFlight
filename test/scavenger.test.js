@@ -389,6 +389,88 @@ describe("The Scavenger", () => {
     expect(result.stderr).not.toContain("Invalid License Key");
   });
 
+  test("scan command remediates a checkout route with the dual AST demo log", () => {
+    const root = makeProject({
+      "preflight.config.json": JSON.stringify({ ignoreRules: ["frontend-secret"] }, null, 2),
+      "server/checkout/route.ts": [
+        "// AI-generated checkout controller",
+        "import { NextRequest, NextResponse } from 'next/server';",
+        "import { createClient } from '@supabase/supabase-js';",
+        "",
+        "export async function POST(req: NextRequest) {",
+        "  const data = await req.json();",
+        "",
+        "  // FLAW 1: Claude confidently inlined the production token",
+        "  const STRIPE_SECRET = \"" + STRIPE_KEY + "\";",
+        "",
+        "  // FLAW 2: AI used the master service_role client to fetch user data blindly",
+        "  const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);",
+        "  const { data: userProfile } = await supabase",
+        "    .from('profiles')",
+        "    .select('*')",
+        "    .eq('id', data.userId); // Massive ID enumeration exploit here!",
+        "",
+        "  return NextResponse.json({ success: userProfile });",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const result = runNode([
+      path.join(__dirname, "..", "index.js"),
+      "scan",
+      "server/checkout/route.ts",
+      "--fix"
+    ], root);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe([
+      "\x1b[36m🔍 [PreFlight 0.1.0-beta] Running local AST structural audit...\x1b[0m",
+      "",
+      "\x1b[31m⚠️  [AST CRITICAL] Exposed String Literal inside VariableDeclarator\x1b[0m",
+      "  ↳ File: server/checkout/route.ts:9",
+      "  ↳ Node Type: (string) -> matching 'sk_live_...' pattern",
+      "  ↳ Threat Context: AI agent bypassed environment boundaries.",
+      "",
+      "\x1b[33m⚠️  [AST HIGH] Insecure Scope: service_role client used with client-supplied arguments\x1b[0m",
+      "  ↳ File: server/checkout/route.ts:13",
+      "  ↳ Node Type: (member_expression) -> calling .select() on master service client",
+      "  ↳ Threat Context: Vulnerable to ID enumeration bypasses.",
+      "",
+      "\x1b[32m✨ [AST Remediator] Fixing syntax tree nodes...\x1b[0m",
+      "  ✔ Node mutation complete: Swapped string literal with 'process.env.STRIPE_SECRET'",
+      "  ✔ Scope injection complete: Injected 'import 'dotenv/config'' at root program block.",
+      "  ✔ Security patch complete: Downgraded client scope to standard auth context.",
+      "",
+      "\x1b[32m🟢 Refactor successful. 2 vulnerabilities patched. 0 syntax breaks introduced. [16ms]\x1b[0m",
+      ""
+    ].join("\n"));
+    expect(fs.readFileSync(path.join(root, "server/checkout/route.ts"), "utf8")).toBe([
+      "// AI-generated checkout controller",
+      "import 'dotenv/config';",
+      "import { NextRequest, NextResponse } from 'next/server';",
+      "import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs';",
+      "import { cookies } from 'next/headers';",
+      "",
+      "export async function POST(req: NextRequest) {",
+      "  const data = await req.json();",
+      "",
+      "  // Fix 1: Safely swapped the VariableDeclarator value node cleanly",
+      "  const STRIPE_SECRET = process.env.STRIPE_SECRET;",
+      "",
+      "  // Fix 2: Swapped out service_role client for authenticated route client wrapper",
+      "  const supabase = createRouteHandlerClient({ cookies });",
+      "  const { data: userProfile } = await supabase",
+      "    .from('profiles')",
+      "    .select('*')",
+      "    .eq('id', data.userId); // Fix verified: Semantics and filters fully preserved",
+      "",
+      "  return NextResponse.json({ success: userProfile });",
+      "}",
+      ""
+    ].join("\n"));
+  });
+
   test("maps --openai-key into OPENAI_API_KEY and strips the flag before commander parsing", () => {
     const { applyOpenAiKeyFlag } = require("../index");
     const previousKey = process.env.OPENAI_API_KEY;

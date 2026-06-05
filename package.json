@@ -44,6 +44,7 @@
   },
   "scripts": {
     "test": "vitest run --globals",
+    "demo:reset": "node reset-demo.js",
     "scan": "node index.js",
     "build:bin": "pkg . --out-path dist",
     "build:bin:mac": "pkg . --targets node18-macos-x64,node18-macos-arm64 --no-bytecode --public --public-packages \"*\" --out-path dist",
