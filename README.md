@@ -48,7 +48,7 @@ The commit proceeds cleanly and PreFlight prints a receipt so you know the local
 
 ```bash
 # Run a local structural scan on uncommitted changes
-npx @preflight/scavenger scan . --diff
+npx preflight-scavenger scan . --diff
 ```
 
 ```bash
