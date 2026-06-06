@@ -1,5 +1,5 @@
 {
-  "name": "preflight-check",
+  "name": "preflight-guardian",
   "version": "0.2.0-beta.1",
   "description": "The local security gate for AI-generated code.",
   "license": "BUSL-1.1",
@@ -40,7 +40,7 @@
   ],
   "bin": {
     "preflight": "index.js",
-    "preflight-check": "index.js"
+    "preflight-guardian": "index.js"
   },
   "scripts": {
     "test": "vitest run --globals",

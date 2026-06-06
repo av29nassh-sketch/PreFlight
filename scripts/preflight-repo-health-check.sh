@@ -51,12 +51,12 @@ npm test
 log "Phase 3: global CLI binary test through npm link"
 npm link
 command -v preflight >/dev/null || fail "preflight binary was not linked"
-command -v preflight-check >/dev/null || fail "preflight-check binary was not linked"
+command -v preflight-guardian >/dev/null || fail "preflight-guardian binary was not linked"
 
-if command -v preflight-check >/dev/null 2>&1; then
-  printf 'Package-name alias found: preflight-check\n'
+if command -v preflight-guardian >/dev/null 2>&1; then
+  printf 'Package-name alias found: preflight-guardian\n'
 else
-  printf 'Note: package name is preflight-check, but the package-name bin was not linked.\n'
+  printf 'Note: package name is preflight-guardian, but the package-name bin was not linked.\n'
   printf 'Using %s for global binary checks.\n' "$CLI_BIN"
 fi
 
