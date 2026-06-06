@@ -52,26 +52,34 @@ describe("PreFlight core modular architecture", () => {
   });
 
   test("scanner redacts confirmed secret findings and blocks unsafe diffs", () => {
-    const { scanDiff, STATES } = require("../src/ast/scanner");
+    const { renderScanReceipt, scanDiff, STATES } = require("../src/ast/scanner");
     const diff = [
       "diff --git a/app.js b/app.js",
+      "+++ b/app.js",
       "+const stripe = \"sk_live_1234567890abcdef\";",
       "+db.query(\"SELECT * FROM users WHERE id = \" + userId);"
     ].join("\n");
 
     const result = scanDiff(diff, { autoFix: true });
+    const receipt = renderScanReceipt(result, { color: false });
 
     expect(result.state).toBe(STATES.CONFIRMED_FINDING);
     expect(result.ok).toBe(false);
     expect(result.findings.map((finding) => finding.kind)).toEqual(["secret", "raw-sql"]);
     expect(result.fixedDiff).toContain("sk_live_REDACTED_BY_PREFLIGHT");
     expect(result.fixedDiff).not.toContain("1234567890abcdef");
+    expect(result.autoPatch).toContain("-const stripe");
+    expect(result.autoPatch).toContain("+const stripe");
+    expect(receipt).toContain("🔴 CONFIRMED FINDING (Hard Block)");
+    expect(receipt).toContain("[Deployed Consequence]: \"If you deploy this, secrets or injectable queries can be abused in production before review catches them.\"");
+    expect(receipt).toContain("[Action Required]: \"Reject this commit or accept the explicit Auto-Heal prompt after reviewing the patch.\"");
   });
 
-  test("scanner returns exact upgrade guidance for fuzzy architectural boundaries", () => {
-    const { FUZZY_CONTEXT_MESSAGE, STATES, renderScanReceipt, scanDiff } = require("../src/ast/scanner");
+  test("scanner returns high-risk drift guidance with deployed consequence for fuzzy boundaries", () => {
+    const { STATES, renderScanReceipt, scanDiff } = require("../src/ast/scanner");
     const diff = [
       "diff --git a/auth.js b/auth.js",
+      "+++ b/auth.js",
       "+const user = await supabase.auth.getUser();",
       "+await client.rpc('tenant_lookup', { id });"
     ].join("\n");
@@ -80,15 +88,16 @@ describe("PreFlight core modular architecture", () => {
 
     expect(result.state).toBe(STATES.NEEDS_RUNTIME_CHECK);
     expect(result.ok).toBe(false);
-    expect(result.message).toBe(FUZZY_CONTEXT_MESSAGE);
-    expect(renderScanReceipt(result)).toBe([
-      "⚠️  Complex Architecture Detected (Fuzzy Context)",
-      "PreFlight's local engine found complex multi-file tenant wrappers or RPC blocks that require deep architectural reasoning.",
+    expect(renderScanReceipt(result, { color: false })).toBe([
+      "🟡 HIGH-RISK DRIFT (Needs Runtime Check)",
+      "PreFlight Scavenger found AI coding drift in a sensitive architectural boundary.",
       "",
-      "👉 To resolve this, run:",
-      "   preflight upgrade",
+      "[Deployed Consequence]: \"If you deploy this, tenant isolation or auth behavior can change across files without a visible route-level failure.\"",
+      "[Action Required]: \"Run the affected flow locally as User A and User B, then verify cross-tenant reads and writes return 403 or an empty result.\"",
       "",
-      "This will show you how to unlock the Cloud AI Engine ($19/mo) for automated contextual patching and deep security tracing.",
+      "Findings:",
+      "- fuzzy-context at auth.js:1",
+      "- fuzzy-context at auth.js:2",
       ""
     ].join("\n"));
   });
@@ -101,6 +110,61 @@ describe("PreFlight core modular architecture", () => {
     expect(result.state).toBe(STATES.LIKELY_SAFE);
     expect(result.ok).toBe(true);
     expect(result.message).toBe(SAFE_RECEIPT);
+  });
+
+  test("scanner catches vibecoder Supabase and Next.js drift rules", () => {
+    const { scanDiff, STATES } = require("../src/ast/scanner");
+
+    const brokenRls = scanDiff([
+      "diff --git a/supabase/migrations/001_policy.sql b/supabase/migrations/001_policy.sql",
+      "+++ b/supabase/migrations/001_policy.sql",
+      "+create policy \"open update\" on profiles for update using (true);"
+    ].join("\n"));
+    const middlewareBypass = scanDiff([
+      "diff --git a/middleware.ts b/middleware.ts",
+      "+++ b/middleware.ts",
+      "+export function middleware() {",
+      "+  return NextResponse.next();",
+      "+}"
+    ].join("\n"));
+    const billingDrift = scanDiff([
+      "diff --git a/app/api/webhooks/stripe/route.ts b/app/api/webhooks/stripe/route.ts",
+      "+++ b/app/api/webhooks/stripe/route.ts",
+      "+import Stripe from 'stripe';",
+      "+export async function POST(req) { return Response.json({ ok: true }); }"
+    ].join("\n"));
+
+    expect(brokenRls.state).toBe(STATES.CONFIRMED_FINDING);
+    expect(brokenRls.findings[0].kind).toBe("supabase-rls");
+    expect(middlewareBypass.state).toBe(STATES.CONFIRMED_FINDING);
+    expect(middlewareBypass.findings[0].kind).toBe("middleware-auth-bypass");
+    expect(billingDrift.state).toBe(STATES.NEEDS_RUNTIME_CHECK);
+    expect(billingDrift.findings[0].kind).toBe("billing-webhook-drift");
+  });
+
+  test("interactive Auto-Heal prompt prints a colorized diff and requires explicit y", async () => {
+    const { promptForAutoHeal } = require("../src/ast/scanner");
+    const output = { text: "", write(chunk) { this.text += chunk; } };
+    const patch = [
+      "--- a/app.js",
+      "+++ b/app.js",
+      "-const stripe = \"sk_live_1234567890abcdef\";",
+      "+const stripe = process.env.STRIPE_SECRET_KEY;"
+    ].join("\n");
+
+    const declined = await promptForAutoHeal(patch, {
+      ask: async (question) => {
+        expect(question).toBe("[y/n] Accept and Auto-Heal? ");
+        return "n";
+      },
+      color: true,
+      output
+    });
+
+    expect(declined).toBe(false);
+    expect(output.text).toContain("\x1b[31m-const stripe");
+    expect(output.text).toContain("\x1b[32m+const stripe");
+    expect(output.text).toContain("[y/n] Accept and Auto-Heal?");
   });
 
   test("hardware router evaluates local capability from CPU, RAM, and VRAM probes", () => {
@@ -251,13 +315,14 @@ describe("PreFlight core modular architecture", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe([
-      "⚠️  Complex Architecture Detected (Fuzzy Context)",
-      "PreFlight's local engine found complex multi-file tenant wrappers or RPC blocks that require deep architectural reasoning.",
+      "🟡 HIGH-RISK DRIFT (Needs Runtime Check)",
+      "PreFlight Scavenger found AI coding drift in a sensitive architectural boundary.",
       "",
-      "👉 To resolve this, run:",
-      "   preflight upgrade",
+      "[Deployed Consequence]: \"If you deploy this, tenant isolation or auth behavior can change across files without a visible route-level failure.\"",
+      "[Action Required]: \"Run the affected flow locally as User A and User B, then verify cross-tenant reads and writes return 403 or an empty result.\"",
       "",
-      "This will show you how to unlock the Cloud AI Engine ($19/mo) for automated contextual patching and deep security tracing.",
+      "Findings:",
+      "- fuzzy-context at unknown:1",
       ""
     ].join("\n"));
     expect(result.stderr).toBe("");

@@ -32,6 +32,7 @@ const { activateLicenseKey: activateDefaultLicenseKey } = require("./src/licensi
 const { startMcpServer: startDefaultMcpServer } = require("./src/mcp/server");
 const { installPreCommitHook: installDefaultPreCommitHook } = require("./src/cli/init");
 const {
+  promptForAutoHeal: promptForDiffAutoHeal,
   renderScanReceipt: renderDiffScanReceipt,
   scanDiff: scanStagedDiff
 } = require("./src/ast/scanner");
@@ -2448,6 +2449,17 @@ async function runCli(argv = process.argv, options = {}) {
       const diff = await readAllInput(process.stdin);
       const result = scanStagedDiff(diff, { autoFix: options.autoFix });
       process.stdout.write(renderDiffScanReceipt(result));
+      if (options.autoFix && result.autoPatch) {
+        const accepted = await promptForDiffAutoHeal(result.autoPatch, {
+          color: true,
+          output: process.stdout
+        });
+        if (accepted) {
+          process.stdout.write("Auto-Heal accepted. Patch review complete; no filesystem write was performed by scan-diff.\n");
+        } else {
+          process.stdout.write("Auto-Heal declined. No files were changed.\n");
+        }
+      }
       process.exitCode = result.ok ? 0 : 1;
     });
 

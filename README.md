@@ -1,97 +1,67 @@
 <div align="center">
 
-# ✈️ PreFlight
+# 🛑 PreFlight Scavenger
 
 <img src="demo.gif" alt="PreFlight Terminal Demo" width="800"/>
 
-**Stop AI Coding Drift. The local terminal guardrail that catches Cursor and Claude hallucinations before they leak your database.**
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![npm version](https://img.shields.io/npm/v/preflight-cli.svg)](https://www.npmjs.com/package/preflight-cli)
+**Stop AI coding drift before it becomes technical debt.**
 
 </div>
 
-## The Problem
+Cursor and Claude can generate hundreds of lines before your coffee cools. That speed is the point, but it makes human review the bottleneck.
 
-AI coding agents move at 100mph. Cursor, Claude, and other agentic coding tools can scaffold features in seconds, but they also silently introduce structural flaws that are easy to miss in review:
+PreFlight Scavenger is the local safety gate for fast-moving founders and vibecoders building with Next.js and Supabase. It catches the scary stuff before you commit: **silently modified database writes, altered auth logic, billing route changes, exposed secrets, and tenant-boundary drift**. Then it explains the risk in plain English so you do not have to reverse-engineer your own app at midnight.
 
-- Row-Level Security gets stripped out or bypassed.
-- Frontend bundles receive hardcoded secrets.
-- Webhooks, auth checks, and tenant boundaries are left half-wired.
-- RPC wrappers and helper abstractions drift away from the security model you thought you had.
+## 🚦 The Tri-State Risk Score
 
-PreFlight is the Shift-Left guardrail for that drift. It intercepts `git commit`, scans the staged diff locally, and blocks unsafe code before it lands in your repository.
+PreFlight Scavenger parses **structural logic**, not just regex matches. It looks at what changed, where it changed, and whether the diff touched security-sensitive code paths.
 
-## Core Engine: The Tri-State Approach
+### 🔴 CONFIRMED FINDING (Hard Block)
 
-PreFlight does not pretend every issue is equally knowable from a local diff. The engine classifies every scan into one of three states:
+AI injected a fatal flaw.
 
-### 🔴 Confirmed Finding
+Examples: **exposed frontend secrets**, raw database writes, hardcoded billing keys, or missing Supabase RLS protections.
 
-PreFlight hard blocks the commit on definitive issues such as exposed Stripe keys, hardcoded credentials, or raw SQL injection patterns.
+The commit is blocked. PreFlight explains the issue and requires explicit approval before applying an auto-patch.
 
-The free local engine can automatically redact confirmed secrets before they ever leave your machine.
+### 🟡 HIGH-RISK DRIFT (Needs Runtime Check)
 
-### 🟢 Likely Safe
+AI modified a sensitive boundary that cannot be proven safe from the local diff alone.
 
-When the staged diff is clean, PreFlight passes the commit normally and prints a transparent receipt:
+Examples: auth wrappers, tenant helpers, Supabase RPC calls, checkout routes, webhook handlers, or permission logic.
 
-```text
-🟢 Safe: Local syntax and basic guards verified.
-```
+The CLI pauses the commit and outputs a **plain-English QA instruction** that tells you what deployed consequence to test before shipping.
 
-### 🟡 Fuzzy Context Detected
+### 🟢 LIKELY SAFE (Trust Receipt)
 
-When the local AST engine hits a complex multi-file boundary such as an RPC wrapper, tenant helper, `supabase.auth` flow, or `createContext` abstraction it cannot fully resolve, PreFlight pauses the commit and prompts the developer to run:
+Structural security guards were verified.
 
-```bash
-preflight upgrade
-```
+The commit proceeds cleanly and PreFlight prints a receipt so you know the local guard actually ran.
 
-That handoff unlocks the Cloud AI Engine for contextual patching and deep security tracing.
+## ⚡ Why PreFlight? (The Vibecoder Reality)
 
-## Quick Start (Free Local Engine)
+- **Zero-Latency Safety:** Runs locally in your terminal or as an MCP server, right where AI-generated code enters your workflow.
+- **The "Plain-English" Translation:** Translates what the AI changed so devs do not have to reverse-engineer their own apps.
+- **Zero Source Upload:** Runs entirely locally. Your code never leaves your machine.
 
-Install the CLI globally:
+## Quick Start
 
 ```bash
-npm install -g preflight-cli
+# Run a local structural scan on uncommitted changes
+npx @preflight/scavenger scan . --diff
 ```
-
-Initialize PreFlight inside your repository:
 
 ```bash
-preflight init
+# Hook it directly into Claude Code / Cursor via MCP
+preflight mcp install
 ```
 
-This installs the safe `.git/hooks/pre-commit` script.
+## Built For The Messy Middle
 
-Commit as usual:
+PreFlight Scavenger is not trying to be another dashboard you forget to open.
 
-```bash
-git commit -m "feat: login route"
-```
+It is for the moment right before `git commit`, when your AI agent has touched a login route, a Supabase query, or a Stripe webhook and you need to know one thing:
 
-PreFlight instantly steps in, scans the staged diff, and blocks the commit if it detects AI Coding Drift.
+**Did the AI just make my app easier to break?**
 
-## PreFlight Pro & Teams (Hybrid Architecture)
-
-PreFlight uses a Hybrid Router.
-
-First, it checks your hardware. If your machine has enough CPU, RAM, and VRAM, PreFlight runs advanced local analysis natively. If not, only complex architectural scans are safely routed to the Cloud AI Engine for deeper reasoning.
-
-Your fast local guard stays free. The cloud path is reserved for the cases a regex or local AST pass cannot honestly prove.
-
-| Feature | Community (Free) | Pro ($19/mo) | Teams ($49/seat/mo) |
-| :--- | :--- | :--- | :--- |
-| Local AST Secret & Syntax Scans | ✅ | ✅ | ✅ |
-| Basic Auto-Fixes (Secrets/Redaction) | ✅ | ✅ | ✅ |
-| Cloud AI Logic Interception | ❌ | ✅ | ✅ |
-| Deep Architectural Auto-Patching | ❌ | ✅ | ✅ |
-| Plain-English QA Prompts | ❌ | ✅ | ✅ |
-
-## Closed Beta
-
-🚀 **PreFlight Pro is currently in Closed Beta.**
-
-Run `preflight upgrade` in your terminal or [click here to join the waitlist](https://waitlister.me/p/preflight) to secure early access to the Cloud AI Engine.
+PreFlight answers that locally, quickly, and in language a builder can act on.
