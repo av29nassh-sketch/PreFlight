@@ -202,4 +202,83 @@ describe("licenseManager", () => {
       instanceId: "instance-id"
     });
   });
+
+  test("extracts repository owners from common git remote URL formats", () => {
+    const { extractGitRemoteOwner } = require("../src/licensing/licenseManager");
+
+    expect(extractGitRemoteOwner("git@github.com:acme/checkout.git")).toBe("acme");
+    expect(extractGitRemoteOwner("https://github.com/acme/checkout.git")).toBe("acme");
+    expect(extractGitRemoteOwner("ssh://git@github.com/acme/checkout.git")).toBe("acme");
+    expect(extractGitRemoteOwner("not-a-remote")).toBe(null);
+  });
+
+  test("defaults to safe commercial context when git origin cannot be inspected", () => {
+    const { evaluateCommercialContext } = require("../src/licensing/licenseManager");
+
+    const result = evaluateCommercialContext({
+      cwd: makeHome(),
+      execSync: () => {
+        const error = new Error("git missing");
+        error.code = "ENOENT";
+        throw error;
+      },
+      config: {
+        licenseTier: "free"
+      }
+    });
+
+    expect(result).toEqual({
+      enterprise: false,
+      owner: null,
+      shouldWarn: false,
+      tier: "free"
+    });
+  });
+
+  test("soft-gates organization repositories for free and solo seats", () => {
+    const { ENTERPRISE_CONTEXT_WARNING, evaluateCommercialContext } = require("../src/licensing/licenseManager");
+
+    const result = evaluateCommercialContext({
+      execSync: () => Buffer.from("git@github.com:acme-platform/checkout.git\n"),
+      config: {
+        githubHandle: "solo-founder",
+        licenseTier: "solo"
+      }
+    });
+
+    expect(result).toMatchObject({
+      enterprise: true,
+      owner: "acme-platform",
+      shouldWarn: true,
+      tier: "solo",
+      message: ENTERPRISE_CONTEXT_WARNING
+    });
+  });
+
+  test("does not soft-gate matching personal repos or team seats", () => {
+    const { evaluateCommercialContext } = require("../src/licensing/licenseManager");
+
+    expect(evaluateCommercialContext({
+      execSync: () => "https://github.com/solo-founder/app.git",
+      config: {
+        githubHandle: "solo-founder",
+        licenseTier: "solo"
+      }
+    })).toMatchObject({
+      enterprise: false,
+      shouldWarn: false
+    });
+
+    expect(evaluateCommercialContext({
+      execSync: () => "https://github.com/acme-platform/app.git",
+      config: {
+        githubHandle: "solo-founder",
+        licenseTier: "team"
+      }
+    })).toMatchObject({
+      enterprise: true,
+      shouldWarn: false,
+      tier: "team"
+    });
+  });
 });

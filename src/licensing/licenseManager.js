@@ -1,7 +1,9 @@
 const fs = require("node:fs");
+const { execSync: defaultExecSync } = require("node:child_process");
 const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
+const chalk = require("chalk");
 
 const CONFIG_DIR = ".preflight";
 const CONFIG_FILE = "config.json";
@@ -14,7 +16,15 @@ const INVALID_LICENSE_MESSAGE =
   "\u274c License is inactive or invalid. Please run 'preflight activate <key>' with a valid key.";
 const ACTIVATION_MESSAGE = "\u2705 PreFlight Pro activated successfully! Unlimited AI auto-fixes unlocked.";
 const EMAIL_MISMATCH_MESSAGE = "\u274c Email does not match the purchase record.";
+const ENTERPRISE_CONTEXT_WARNING =
+  "🟡 Enterprise Context Detected. This repository belongs to an organization workspace but is running via a Solo/Free seat. Please run 'preflight upgrade' or contact your administrator to provision a Team license.";
 const OFFLINE_ERROR_CODES = new Set(["EAI_AGAIN", "ECONNRESET", "ETIMEDOUT", "ENETUNREACH", "ENOTFOUND", "ECONNREFUSED"]);
+const TEAM_LICENSE_TIERS = new Set(["team", "teams", "enterprise", "organization", "org"]);
+const SOLO_LICENSE_TIERS = new Set(["free", "solo", "pro", "personal", "individual"]);
+const ENTERPRISE_OWNER_PATTERNS = [
+  /(?:^|[-_])(corp|company|enterprise|eng|engineering|team|teams|platform|labs|studio|agency|systems)(?:$|[-_])/i,
+  /(?:inc|llc|ltd|gmbh|plc)$/i
+];
 
 function getConfigPath(homeDir = os.homedir()) {
   return path.join(homeDir, CONFIG_DIR, CONFIG_FILE);
@@ -169,6 +179,145 @@ async function verifyFixPermission(options = {}) {
   return freePermission(config);
 }
 
+function normalizeHandle(value) {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : null;
+}
+
+function normalizeLicenseTier(config = {}) {
+  const rawTier = config.licenseTier || config.tier || config.plan || config.planName;
+  const tier = normalizeHandle(rawTier);
+  if (tier) {
+    return tier;
+  }
+
+  return config.licenseKey ? "solo" : "free";
+}
+
+function extractConfiguredPersonalHandle(config = {}) {
+  return normalizeHandle(
+    config.githubHandle ||
+      config.githubUsername ||
+      config.personalGitHubHandle ||
+      config.personalHandle ||
+      config.owner
+  );
+}
+
+function normalizeStringList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map(normalizeHandle).filter(Boolean);
+}
+
+function extractGitRemoteOwner(remoteUrl) {
+  const value = typeof remoteUrl === "string" || Buffer.isBuffer(remoteUrl)
+    ? String(remoteUrl).trim()
+    : "";
+  if (!value) {
+    return null;
+  }
+
+  const scpLike = /^[^@\s]+@[^:\s]+:([^/\s]+)\/[^/\s]+(?:\.git)?$/i.exec(value);
+  if (scpLike) {
+    return scpLike[1];
+  }
+
+  try {
+    const parsed = new URL(value);
+    const parts = parsed.pathname.replace(/^\/+/, "").split("/").filter(Boolean);
+    return parts[0] || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function inspectGitRemoteOwner(options = {}) {
+  const execSync = options.execSync || defaultExecSync;
+
+  try {
+    const remoteUrl = execSync("git remote get-url origin", {
+      cwd: options.cwd || process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 2000
+    });
+    return extractGitRemoteOwner(remoteUrl);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function isTeamTier(tier) {
+  return TEAM_LICENSE_TIERS.has(normalizeHandle(tier));
+}
+
+function isSoloOrFreeTier(tier) {
+  return SOLO_LICENSE_TIERS.has(normalizeHandle(tier));
+}
+
+function isEnterpriseOwner(owner, config = {}) {
+  const normalizedOwner = normalizeHandle(owner);
+  if (!normalizedOwner) {
+    return false;
+  }
+
+  const personalHandle = extractConfiguredPersonalHandle(config);
+  const personalAllowList = normalizeStringList(config.personalOwnerAllowList || config.personalOwners);
+  if (personalHandle === normalizedOwner || personalAllowList.includes(normalizedOwner)) {
+    return false;
+  }
+
+  const organizationAllowList = normalizeStringList(config.enterpriseOwnerAllowList || config.organizationOwners || config.organizations);
+  if (organizationAllowList.includes(normalizedOwner)) {
+    return true;
+  }
+
+  if (personalHandle && personalHandle !== normalizedOwner) {
+    return true;
+  }
+
+  return ENTERPRISE_OWNER_PATTERNS.some((pattern) => pattern.test(normalizedOwner));
+}
+
+function renderEnterpriseContextWarning(options = {}) {
+  if (options.color === false) {
+    return ENTERPRISE_CONTEXT_WARNING;
+  }
+
+  return chalk.yellow.bold(ENTERPRISE_CONTEXT_WARNING);
+}
+
+function readCommercialConfigSync(options = {}) {
+  if (options.config && typeof options.config === "object") {
+    return options.config;
+  }
+
+  try {
+    const raw = fs.readFileSync(getConfigPath(options.homeDir), "utf8");
+    return JSON.parse(raw);
+  } catch (_error) {
+    return defaultConfig();
+  }
+}
+
+function evaluateCommercialContext(options = {}) {
+  const config = readCommercialConfigSync(options);
+  const owner = inspectGitRemoteOwner(options);
+  const tier = normalizeLicenseTier(config);
+  const enterprise = isEnterpriseOwner(owner, config);
+  const shouldWarn = enterprise && !isTeamTier(tier) && isSoloOrFreeTier(tier);
+
+  return {
+    enterprise,
+    owner,
+    shouldWarn,
+    tier,
+    ...(shouldWarn ? { message: renderEnterpriseContextWarning(options) } : {})
+  };
+}
+
 async function activateLicenseKey(key, userEmail, options = {}) {
   if (typeof userEmail === "object" && userEmail !== null) {
     options = userEmail;
@@ -234,15 +383,20 @@ async function recordFreeFixUsage(options = {}) {
 module.exports = {
   ACTIVATION_MESSAGE,
   EMAIL_MISMATCH_MESSAGE,
+  ENTERPRISE_CONTEXT_WARNING,
   FREE_FIXES_EXHAUSTED_MESSAGE,
   FREE_FIX_LIMIT,
   INVALID_LICENSE_MESSAGE,
   LEMON_SQUEEZY_ACTIVATE_URL,
   LEMON_SQUEEZY_VALIDATE_URL,
   activateLicenseKey,
+  evaluateCommercialContext,
+  extractGitRemoteOwner,
   getConfigPath,
+  inspectGitRemoteOwner,
   readConfig,
   recordFreeFixUsage,
+  renderEnterpriseContextWarning,
   verifyFixPermission,
   writeConfig
 };
