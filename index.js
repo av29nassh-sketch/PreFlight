@@ -1908,12 +1908,12 @@ function renderReport(findings, options = {}) {
   };
 
   if (findings.length === 0) {
-    return `${colorize("success", "The Scavenger found 0 issues.", colorOptions)}\n`;
+    return `${colorize("success", "PreFlight Check found 0 issues.", colorOptions)}\n`;
   }
 
   const plural = findings.length === 1 ? "issue" : "issues";
   const lines = [
-    colorize("error", `The Scavenger found ${findings.length} ${plural}.`, colorOptions),
+    colorize("error", `PreFlight Check found ${findings.length} ${plural}.`, colorOptions),
     ""
   ];
 
@@ -1945,7 +1945,7 @@ function renderSarif(findings, options = {}) {
       {
         tool: {
           driver: {
-            name: "PreFlight Scavenger",
+            name: "PreFlight Check",
             informationUri: "https://preflight.local",
             rules: Object.values(SARIF_RULES)
           }
@@ -2335,8 +2335,9 @@ async function runCli(argv = process.argv, options = {}) {
   const startMcpServer = options.startMcpServer || startDefaultMcpServer;
   const program = new Command();
   program
-    .name("scavenger")
-    .description("Local zero-knowledge scanner for Next.js and Supabase security flaws.");
+    .name("preflight")
+    .description("Local zero-knowledge scanner for Next.js and Supabase security flaws.")
+    .version(packageJson.version, "-v, --version");
 
   program
     .command("activate")
@@ -2615,7 +2616,7 @@ module.exports = {
 
 if (require.main === module) {
   runCli().catch((error) => {
-    process.stderr.write(`The Scavenger failed: ${error.message}\n`);
+    process.stderr.write(`PreFlight Check failed: ${error.message}\n`);
     process.exitCode = 2;
   });
 }

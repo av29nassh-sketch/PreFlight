@@ -62,7 +62,7 @@ describe("PreFlight MCP server tools", () => {
       loadPreflightPolicy: async () => ({}),
       recordFreeFixUsage: async () => {},
       renderAuditReport: () => "\x1b[32maudit report\x1b[39m\n",
-      renderReport: (findings, options) => (options.color === false ? "The Scavenger found 0 issues.\n" : "\x1b[32mThe Scavenger found 0 issues.\x1b[39m\n"),
+      renderReport: (findings, options) => (options.color === false ? "PreFlight Check found 0 issues.\n" : "\x1b[32mPreFlight Check found 0 issues.\x1b[39m\n"),
       scanProject: async () => [],
       scanProjectDiff: async () => [],
       verifyFixPermission: async () => ({ allowed: true, tier: "free" })
@@ -71,7 +71,7 @@ describe("PreFlight MCP server tools", () => {
     const scanTool = registered.find((tool) => tool.name === "scan_project");
     const result = await scanTool.handler({ directory: ".", diff: false, format: "text" });
 
-    expect(result.content[0].text).toBe("The Scavenger found 0 issues.\n");
+    expect(result.content[0].text).toBe("PreFlight Check found 0 issues.\n");
     expect(result.content[0].text).not.toMatch(/\x1b\[[0-9;]+m/);
   });
 

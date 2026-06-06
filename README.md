@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛑 PreFlight Scavenger
+# 🛑 PreFlight Check
 
 <img src="demo.gif" alt="PreFlight Terminal Demo" width="800"/>
 
@@ -10,11 +10,11 @@
 
 Cursor and Claude can generate hundreds of lines before your coffee cools. That speed is the point, but it makes human review the bottleneck.
 
-PreFlight Scavenger is the local safety gate for fast-moving founders and vibecoders building with Next.js and Supabase. It catches the scary stuff before you commit: **silently modified database writes, altered auth logic, billing route changes, exposed secrets, and tenant-boundary drift**. Then it explains the risk in plain English so you do not have to reverse-engineer your own app at midnight.
+PreFlight Check is the local safety gate for fast-moving founders and vibecoders building with Next.js and Supabase. It catches the scary stuff before you commit: **silently modified database writes, altered auth logic, billing route changes, exposed secrets, and tenant-boundary drift**. Then it explains the risk in plain English so you do not have to reverse-engineer your own app at midnight.
 
 ## 🚦 The Tri-State Risk Score
 
-PreFlight Scavenger parses **structural logic**, not just regex matches. It looks at what changed, where it changed, and whether the diff touched security-sensitive code paths.
+PreFlight Check parses **structural logic**, not just regex matches. It looks at what changed, where it changed, and whether the diff touched security-sensitive code paths.
 
 ### 🔴 CONFIRMED FINDING (Hard Block)
 
@@ -48,7 +48,7 @@ The commit proceeds cleanly and PreFlight prints a receipt so you know the local
 
 ```bash
 # Run a local structural scan on uncommitted changes
-npx preflight-scavenger scan . --diff
+npx preflight-check scan . --diff
 ```
 
 ```bash
@@ -58,7 +58,7 @@ preflight mcp install
 
 ## Built For The Messy Middle
 
-PreFlight Scavenger is not trying to be another dashboard you forget to open.
+PreFlight Check is not trying to be another dashboard you forget to open.
 
 It is for the moment right before `git commit`, when your AI agent has touched a login route, a Supabase query, or a Stripe webhook and you need to know one thing:
 

@@ -90,7 +90,7 @@ describe("PreFlight core modular architecture", () => {
     expect(result.ok).toBe(false);
     expect(renderScanReceipt(result, { color: false })).toBe([
       "🟡 HIGH-RISK DRIFT (Needs Runtime Check)",
-      "PreFlight Scavenger found AI coding drift in a sensitive architectural boundary.",
+      "PreFlight Check found AI coding drift in a sensitive architectural boundary.",
       "",
       "[Deployed Consequence]: \"If you deploy this, tenant isolation or auth behavior can change across files without a visible route-level failure.\"",
       "[Action Required]: \"Run the affected flow locally as User A and User B, then verify cross-tenant reads and writes return 403 or an empty result.\"",
@@ -316,7 +316,7 @@ describe("PreFlight core modular architecture", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe([
       "🟡 HIGH-RISK DRIFT (Needs Runtime Check)",
-      "PreFlight Scavenger found AI coding drift in a sensitive architectural boundary.",
+      "PreFlight Check found AI coding drift in a sensitive architectural boundary.",
       "",
       "[Deployed Consequence]: \"If you deploy this, tenant isolation or auth behavior can change across files without a visible route-level failure.\"",
       "[Action Required]: \"Run the affected flow locally as User A and User B, then verify cross-tenant reads and writes return 403 or an empty result.\"",
@@ -339,5 +339,18 @@ describe("PreFlight core modular architecture", () => {
     expect(result.stdout).toContain("https://waitlister.me/p/preflight");
     expect(result.stdout).not.toContain("[INSERT_YOUR_WAITLIST_URL]");
     expect(result.stdout).not.toContain("click here to join the waitlist](#)");
+  });
+
+  test("CLI exposes a version flag for binary smoke tests", () => {
+    const root = makeProject({});
+    const packageJson = require("../package.json");
+    const result = runNode([
+      path.join(__dirname, "..", "index.js"),
+      "--version"
+    ], root);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(packageJson.version);
+    expect(result.stderr).toBe("");
   });
 });

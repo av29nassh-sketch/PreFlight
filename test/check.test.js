@@ -17,7 +17,7 @@ const POSTGRES_URI = "postgres://" + "user:pass@localhost:5432/app";
 const roots = [];
 
 function makeProject(files) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "scavenger-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "check-"));
   roots.push(root);
 
   for (const [relativePath, contents] of Object.entries(files)) {
@@ -74,7 +74,7 @@ afterEach(() => {
   }
 });
 
-describe("The Scavenger", () => {
+describe("PreFlight Check", () => {
   test("flags Stripe secret literals in app client components with file and line", async () => {
     const { scanProject } = require("../index");
     const root = makeProject({
@@ -261,7 +261,7 @@ describe("The Scavenger", () => {
       }
     ], { color: false });
 
-    expect(report).toContain("The Scavenger found 1 issue");
+    expect(report).toContain("PreFlight Check found 1 issue");
     expect(report).toContain("/repo/app/page.tsx:3");
     expect(report).toContain("frontend-secret");
   });
@@ -283,7 +283,7 @@ describe("The Scavenger", () => {
       stream: { isTTY: true }
     });
 
-    expect(report).toContain(terminalChalk.red.bold("The Scavenger found 1 issue."));
+    expect(report).toContain(terminalChalk.red.bold("PreFlight Check found 1 issue."));
     expect(report).toContain(terminalChalk.red.bold("CRITICAL"));
   });
 
@@ -306,9 +306,9 @@ describe("The Scavenger", () => {
       stream: { isTTY: false }
     });
 
-    expect(disabled).toContain("The Scavenger found 1 issue.");
+    expect(disabled).toContain("PreFlight Check found 1 issue.");
     expect(disabled).not.toMatch(/\x1b\[[0-9;]+m/);
-    expect(piped).toBe("The Scavenger found 0 issues.\n");
+    expect(piped).toBe("PreFlight Check found 0 issues.\n");
     expect(piped).not.toMatch(/\x1b\[[0-9;]+m/);
   });
 
@@ -384,7 +384,7 @@ describe("The Scavenger", () => {
     const result = runNode([path.join(__dirname, "..", "index.js"), "scan", root, "--no-color"], root);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("The Scavenger found 0 issues.");
+    expect(result.stdout).toContain("PreFlight Check found 0 issues.");
     expect(result.stdout).not.toContain("Please enter your PreFlight license key");
     expect(result.stderr).not.toContain("Invalid License Key");
   });
@@ -701,7 +701,7 @@ describe("The Scavenger", () => {
     }
 
     expect(auditCalled).toBe(false);
-    expect(writes.join("")).toContain("The Scavenger found 0 issues.");
+    expect(writes.join("")).toContain("PreFlight Check found 0 issues.");
   });
 
   test("mcp command starts the MCP server without scan output", async () => {
@@ -1059,7 +1059,7 @@ describe("The Scavenger", () => {
     const sarif = JSON.parse(fs.readFileSync(sarifPath, "utf8"));
 
     expect(result.status).toBe(1);
-    expect(result.stdout).not.toContain("The Scavenger found");
+    expect(result.stdout).not.toContain("PreFlight Check found");
     expect(sarif.version).toBe("2.1.0");
     expect(sarif.runs[0].tool.driver.rules.map((rule) => rule.id).sort()).toEqual([
       "architectural-leak",
@@ -1189,7 +1189,7 @@ describe("The Scavenger", () => {
     const result = runNode([path.join(__dirname, "..", "index.js"), "scan", scanRoot, "--no-color"], commandCwd);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("The Scavenger found 0 issues.");
+    expect(result.stdout).toContain("PreFlight Check found 0 issues.");
   });
 
   test("scan command warns and ignores invalid preflight config JSON", () => {
@@ -1202,7 +1202,7 @@ describe("The Scavenger", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("Warning: preflight.config.json contains invalid JSON and was ignored.");
-    expect(result.stdout).toContain("The Scavenger found 0 issues.");
+    expect(result.stdout).toContain("PreFlight Check found 0 issues.");
   });
 
   test("diff scan only scans changed source and sql files", async () => {

@@ -68,7 +68,7 @@ describe("PreFlight CLI live E2E", () => {
     const result = await runCli("node index.js scan ./demo-live-test");
 
     expect(result.code).toBe(1);
-    expect(result.stdout).toContain("The Scavenger found 1 issue");
+    expect(result.stdout).toContain("PreFlight Check found 1 issue");
     expect(result.stdout).toContain("AWS Access Key ID");
     expect(result.stdout).toContain("config.ts:1");
   });

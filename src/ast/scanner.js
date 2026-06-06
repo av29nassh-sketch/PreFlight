@@ -1,3 +1,4 @@
+const fs = require("node:fs");
 const readline = require("node:readline");
 
 const STATES = Object.freeze({
@@ -351,6 +352,27 @@ async function askWithReadline(question, options = {}) {
   }
 }
 
+function openPromptInput(options = {}) {
+  if (options.input) {
+    return { input: options.input, close: () => {} };
+  }
+
+  if (process.stdin.isTTY) {
+    return { input: process.stdin, close: () => {} };
+  }
+
+  const ttyPath = process.platform === "win32" ? "\\\\.\\CONIN$" : "/dev/tty";
+  try {
+    const input = fs.createReadStream(ttyPath);
+    return {
+      input,
+      close: () => input.destroy()
+    };
+  } catch (_error) {
+    return { input: process.stdin, close: () => {} };
+  }
+}
+
 async function promptForAutoHeal(patch, options = {}) {
   const output = options.output || process.stdout;
   const question = "[y/n] Accept and Auto-Heal? ";
@@ -362,10 +384,12 @@ async function promptForAutoHeal(patch, options = {}) {
     output.write(question);
     answer = await options.ask(question);
   } else {
+    const promptInput = openPromptInput(options);
     answer = await askWithReadline(question, {
-      input: options.input,
+      input: promptInput.input,
       output
     });
+    promptInput.close();
   }
 
   return String(answer || "").trim().toLowerCase() === "y";
@@ -399,7 +423,7 @@ function renderScanReceipt(result) {
     const explanation = firstExplanation(result.findings || [], CONSEQUENCES.fuzzy);
     return `${[
       HIGH_RISK_DRIFT_MESSAGE,
-      "PreFlight Scavenger found AI coding drift in a sensitive architectural boundary.",
+      "PreFlight Check found AI coding drift in a sensitive architectural boundary.",
       "",
       `[Deployed Consequence]: "${explanation.deployedConsequence}"`,
       `[Action Required]: "${explanation.actionRequired}"`,
@@ -412,7 +436,7 @@ function renderScanReceipt(result) {
   const explanation = firstExplanation(result.findings || [], CONSEQUENCES.confirmed);
   return `${[
     CONFIRMED_FINDING_MESSAGE,
-    "PreFlight Scavenger blocked this commit because AI-generated code introduced a confirmed production risk.",
+    "PreFlight Check blocked this commit because AI-generated code introduced a confirmed production risk.",
     "",
     `[Deployed Consequence]: "${explanation.deployedConsequence}"`,
     `[Action Required]: "${explanation.actionRequired}"`,
