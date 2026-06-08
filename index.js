@@ -417,6 +417,19 @@ function isBackendApiRoute(relativePath) {
   return isAppApiRoute(relativePath) || isPagesApiRoute(relativePath);
 }
 
+function hasUseServerDirective(sourceCode) {
+  return /(?:^|[\n;{])\s*["']use server["']\s*;?/m.test(String(sourceCode || "").replace(/^\uFEFF/, ""));
+}
+
+function isBackendSsrfScanTarget(relativePath, sourceCode = "") {
+  const normalized = toPosix(relativePath);
+  return (
+    isBackendApiRoute(normalized) ||
+    /\.server\.(?:js|jsx|ts|tsx)$/.test(normalized) ||
+    hasUseServerDirective(sourceCode)
+  );
+}
+
 function isClientComponent(relativePath, source) {
   const normalized = toPosix(relativePath);
 
@@ -1107,6 +1120,294 @@ function scanBackendStrings({ filePath, relativePath, sourceCode, tree, includeS
   return dedupeFindings(findings);
 }
 
+const USER_CONTROLLED_URL_PATTERNS = [
+  /\b(?:req|request)\.query\b/i,
+  /\b(?:req|request)\.body\b/i,
+  /\b(?:req|request)\.params\b/i,
+  /\b(?:req|request)\.url\b/i,
+  /\bnextUrl\.searchParams\b/i,
+  /\bsearchParams\.get\s*\(/i,
+  /\b(?:req|request)\.json\s*\(/i,
+  /\bformData\s*\(/i,
+  /\bformData\.get\s*\(/i
+];
+
+const SAFE_URL_VALIDATOR_PATTERN =
+  /\b(?:validate|sanitize|assert|ensure|normalize|parse)(?:[A-Za-z0-9_$]*)(?:Url|URL|Uri|URI|Endpoint|Redirect|Outbound|Webhook)|\b(?:is|allow|verify)(?:[A-Za-z0-9_$]*)(?:Safe|Allowed|Trusted|Internal|Private)(?:[A-Za-z0-9_$]*)(?:Url|URL|Uri|URI|Endpoint|Redirect)?/;
+
+const TRUSTED_URL_VALIDATOR_IMPORT_PATTERN =
+  /(?:^|[/@._-])(?:security|secure|ssrf|allowlist|safe-url|safe_url|url-validator|url_validator|validate-url|validate_url|outbound-url|outbound_url|redirect-validator|redirect_validator)(?:$|[/._-])/i;
+
+function isUserControlledUrlExpression(expressionText, taintedVariables = new Set()) {
+  const text = String(expressionText || "");
+  return (
+    USER_CONTROLLED_URL_PATTERNS.some((pattern) => pattern.test(text)) ||
+    [...taintedVariables].some((name) => new RegExp(`\\b${escapeRegexLiteral(name)}\\b`).test(text))
+  );
+}
+
+function isSafeUrlValidatorName(value) {
+  return SAFE_URL_VALIDATOR_PATTERN.test(String(value || ""));
+}
+
+function isTrustedUrlValidatorImportPath(importPath) {
+  return TRUSTED_URL_VALIDATOR_IMPORT_PATTERN.test(toPosix(importPath || ""));
+}
+
+function parseTrustedNamedImports(namedImportText, trustedValidators) {
+  const body = namedImportText.replace(/^\{|\}$/g, "");
+  for (const part of body.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const [importedName, localName] = trimmed.split(/\s+as\s+/i).map((value) => value.trim());
+    const bindingName = localName || importedName;
+    if (isSafeUrlValidatorName(importedName) || isSafeUrlValidatorName(bindingName)) {
+      trustedValidators.functions.add(bindingName);
+    }
+  }
+}
+
+function collectTrustedUrlValidators(tree, sourceCode) {
+  const trustedValidators = {
+    functions: new Set(),
+    namespaces: new Set()
+  };
+
+  walkTree(tree.rootNode, (node) => {
+    if (node.type !== "import_statement") {
+      return;
+    }
+
+    const importText = textFromNode(sourceCode, node);
+    const importPath = extractImportPath(importText);
+    if (!isTrustedUrlValidatorImportPath(importPath)) {
+      return;
+    }
+
+    const namespaceMatch = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(importText);
+    if (namespaceMatch) {
+      trustedValidators.namespaces.add(namespaceMatch[1]);
+    }
+
+    const namedMatch = /\{([^}]+)\}/.exec(importText);
+    if (namedMatch) {
+      parseTrustedNamedImports(`{${namedMatch[1]}}`, trustedValidators);
+    }
+
+    const defaultMatch = /^\s*import\s+([A-Za-z_$][\w$]*)\s*(?:,|\s+from\b)/.exec(importText);
+    if (defaultMatch && isSafeUrlValidatorName(defaultMatch[1])) {
+      trustedValidators.functions.add(defaultMatch[1]);
+    }
+  });
+
+  return trustedValidators;
+}
+
+function isTrustedSafeUrlValidatorCallee(calleeText, trustedValidators) {
+  const compactCallee = String(calleeText || "").replace(/\s+/g, "");
+  if (trustedValidators.functions.has(compactCallee)) {
+    return true;
+  }
+
+  const memberMatch = /^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/.exec(compactCallee);
+  return Boolean(
+    memberMatch &&
+    trustedValidators.namespaces.has(memberMatch[1]) &&
+    isSafeUrlValidatorName(memberMatch[2])
+  );
+}
+
+function isTrustedSafeUrlValidatorCallText(callText, trustedValidators) {
+  const match = /^\s*([A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)?)\s*\(/.exec(String(callText || ""));
+  return Boolean(match && isTrustedSafeUrlValidatorCallee(match[1], trustedValidators));
+}
+
+function collectPatternIdentifiers(node, sourceCode, identifiers = []) {
+  if (!node) {
+    return identifiers;
+  }
+
+  if (
+    node.type === "identifier" ||
+    node.type === "shorthand_property_identifier_pattern" ||
+    node.type === "property_identifier"
+  ) {
+    identifiers.push(textFromNode(sourceCode, node));
+    return identifiers;
+  }
+
+  for (let index = 0; index < node.namedChildCount; index += 1) {
+    collectPatternIdentifiers(node.namedChild(index), sourceCode, identifiers);
+  }
+
+  return identifiers;
+}
+
+function collectSsrfDataflow(tree, sourceCode, trustedValidators) {
+  const taintedVariables = new Set();
+  const validatedVariables = new Set();
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    walkTree(tree.rootNode, (node) => {
+      if (node.type === "variable_declarator") {
+        const nameNode = childForField(node, "name");
+        const valueNode = childForField(node, "value");
+        if (!nameNode || !valueNode) {
+          return;
+        }
+
+        const valueText = textFromNode(sourceCode, valueNode);
+        const names = collectPatternIdentifiers(nameNode, sourceCode);
+        const isValidated = isTrustedSafeUrlValidatorCallText(valueText, trustedValidators);
+        const isTainted = isUserControlledUrlExpression(valueText, taintedVariables);
+
+        if (isValidated && isTainted) {
+          for (const name of names) {
+            if (!validatedVariables.has(name)) {
+              validatedVariables.add(name);
+              changed = true;
+            }
+          }
+          return;
+        }
+
+        if (isTainted) {
+          for (const name of names) {
+            if (!taintedVariables.has(name)) {
+              taintedVariables.add(name);
+              changed = true;
+            }
+          }
+        }
+      }
+
+      if (node.type === "assignment_expression") {
+        const leftNode = childForField(node, "left");
+        const rightNode = childForField(node, "right");
+        if (!leftNode || !rightNode) {
+          return;
+        }
+
+        const rightText = textFromNode(sourceCode, rightNode);
+        if (isUserControlledUrlExpression(rightText, taintedVariables)) {
+          for (const name of collectPatternIdentifiers(leftNode, sourceCode)) {
+            if (!taintedVariables.has(name)) {
+              taintedVariables.add(name);
+              changed = true;
+            }
+          }
+        }
+      }
+
+      if (node.type === "call_expression") {
+        const callText = textFromNode(sourceCode, node);
+        const calleeText = callExpressionCalleeText(sourceCode, node);
+        if (!isTrustedSafeUrlValidatorCallee(calleeText, trustedValidators)) {
+          return;
+        }
+
+        for (const name of taintedVariables) {
+          if (new RegExp(`\\b${escapeRegexLiteral(name)}\\b`).test(callText) && !validatedVariables.has(name)) {
+            validatedVariables.add(name);
+            changed = true;
+          }
+        }
+      }
+    });
+  }
+
+  return { taintedVariables, validatedVariables };
+}
+
+function firstArgumentNode(callNode) {
+  const argsNode = childForField(callNode, "arguments");
+  return argsNode && argsNode.namedChildCount > 0 ? argsNode.namedChild(0) : null;
+}
+
+function callExpressionCalleeText(sourceCode, node) {
+  const callee = childForField(node, "function");
+  return callee ? textFromNode(sourceCode, callee).replace(/\s+/g, "") : "";
+}
+
+function isOutboundHttpPrimitive(calleeText) {
+  return (
+    calleeText === "fetch" ||
+    calleeText === "axios" ||
+    /^axios\.(?:get|post|put|patch|delete|request)$/.test(calleeText) ||
+    /^(?:http|https)\.(?:get|request)$/.test(calleeText)
+  );
+}
+
+function isStaticUrlExpression(argumentText) {
+  const text = String(argumentText || "").trim();
+  if (/^['"`]https?:\/\//i.test(text)) {
+    return true;
+  }
+
+  return /^new\s+URL\s*\(\s*['"`]https?:\/\//i.test(text);
+}
+
+function isValidatedUrlExpression(argumentText, validatedVariables = new Set(), trustedValidators = { functions: new Set(), namespaces: new Set() }) {
+  const text = String(argumentText || "");
+  return (
+    isTrustedSafeUrlValidatorCallText(text, trustedValidators) ||
+    [...validatedVariables].some((name) => new RegExp(`\\b${escapeRegexLiteral(name)}\\b`).test(text))
+  );
+}
+
+function scanSsrfFindings({ filePath, relativePath, sourceCode, tree }) {
+  if (!isSourceFile(filePath) || !isBackendSsrfScanTarget(relativePath, sourceCode)) {
+    return [];
+  }
+
+  const trustedValidators = collectTrustedUrlValidators(tree, sourceCode);
+  const { taintedVariables, validatedVariables } = collectSsrfDataflow(tree, sourceCode, trustedValidators);
+  const findings = [];
+  walkTree(tree.rootNode, (node) => {
+    if (node.type !== "call_expression") {
+      return;
+    }
+
+    const calleeText = callExpressionCalleeText(sourceCode, node);
+    if (!isOutboundHttpPrimitive(calleeText)) {
+      return;
+    }
+
+    const argumentNode = firstArgumentNode(node);
+    if (!argumentNode) {
+      return;
+    }
+
+    const argumentText = textFromNode(sourceCode, argumentNode);
+    if (
+      isStaticUrlExpression(argumentText) ||
+      isValidatedUrlExpression(argumentText, validatedVariables, trustedValidators) ||
+      !isUserControlledUrlExpression(argumentText, taintedVariables)
+    ) {
+      return;
+    }
+
+    findings.push(finding({
+      ruleId: "ssrf",
+      severity: "high",
+      filePath,
+      line: lineFromStringIndex(sourceCode, node.startIndex),
+      message: "Outbound HTTP request uses a user-controlled URL without private-IP and redirect validation.",
+      evidence: textFromNode(sourceCode, node).replace(/\s+/g, " ").trim(),
+      deployedConsequence: "If you deploy this, attackers can pivot server-side requests into internal metadata services or private network targets.",
+      actionRequired: "Route the URL through an allowlist/private-IP/redirect validator, then test localhost, 169.254.169.254, and redirect-chain inputs.",
+      requiresDeepRemediation: true
+    }));
+  });
+
+  return dedupeFindings(findings);
+}
+
 function severityFromCustomRule(rule) {
   return rule.severity === "warn" ? "warning" : "critical";
 }
@@ -1240,8 +1541,47 @@ function scanCustomTeamRules({ filePath, relativePath, sourceCode, tree, policy 
   return dedupeFindings(findings);
 }
 
-function scanBackendSource() {
-  return [];
+async function scanBackendSource(rootDir = process.cwd(), options = {}) {
+  const resolvedRoot = path.resolve(rootDir);
+  const policy = options.policy || normalizePolicy();
+  const relativePaths = await fg(["**/*.{js,jsx,ts,tsx}"], {
+    cwd: resolvedRoot,
+    absolute: false,
+    dot: false,
+    ignore: ["**/*.d.ts", "**/node_modules/**", "**/.next/**", "**/dist/**", "**/coverage/**"]
+  });
+  const findings = [];
+
+  for (const relativePath of relativePaths.sort()) {
+    if (isIgnoredPath(relativePath, policy)) {
+      continue;
+    }
+
+    const filePath = path.join(resolvedRoot, relativePath);
+    const parsed = await prepareParsedSourceForScan(filePath, { warn: options.warn });
+    if (parsed === null) {
+      continue;
+    }
+
+    try {
+      findings.push(...scanSsrfFindings({
+        filePath,
+        relativePath: toPosix(relativePath),
+        sourceCode: parsed.sourceCode,
+        tree: parsed.tree
+      }));
+    } finally {
+      parsed.tree.delete?.();
+    }
+  }
+
+  return applyPolicy(dedupeFindings(findings), policy, resolvedRoot).sort((a, b) => {
+    if (a.filePath === b.filePath) {
+      return a.line - b.line;
+    }
+
+    return a.filePath.localeCompare(b.filePath);
+  });
 }
 
 function scanSecretSource() {
@@ -1367,6 +1707,7 @@ function scanParsedSourceFile({ filePath, relativePath, sourceCode, tree, policy
       tree,
       includeStandaloneBackend: true
     }),
+    ...scanSsrfFindings({ filePath, relativePath, sourceCode, tree }),
     ...scanSqlConcatenationFindings({ filePath, sourceCode, tree }),
     ...scanArchitecturalLeakFindings({ filePath, sourceCode, tree }),
     ...scanCustomTeamRules({ filePath, relativePath, sourceCode, tree, policy })

@@ -1384,6 +1384,235 @@ describe("PreFlight Check", () => {
     expect(findings.some((finding) => finding.ruleId === "custom-team-rule")).toBe(false);
   });
 
+  test("backend SSRF scan flags fetch with URL sourced from query params", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/proxy/route.ts": [
+        "export async function GET(req) {",
+        "  const target = req.nextUrl.searchParams.get('url');",
+        "  const response = await fetch(target);",
+        "  return Response.json(await response.json());",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ssrf",
+          severity: "high",
+          filePath: path.join(root, "app/api/proxy/route.ts"),
+          line: 3,
+          evidence: "fetch(target)",
+          requiresDeepRemediation: true
+        })
+      ])
+    );
+  });
+
+  test("backend SSRF scan covers axios and node http primitives from request JSON", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "pages/api/proxy.ts": [
+        "import axios from 'axios';",
+        "import https from 'node:https';",
+        "export default async function handler(req, res) {",
+        "  const body = await req.json();",
+        "  const target = body.url;",
+        "  await axios.get(target);",
+        "  https.request(target);",
+        "  res.json({ ok: true });",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ssrf",
+          line: 6,
+          evidence: "axios.get(target)"
+        }),
+        expect.objectContaining({
+          ruleId: "ssrf",
+          line: 7,
+          evidence: "https.request(target)"
+        })
+      ])
+    );
+  });
+
+  test("backend SSRF scan treats Next.js server actions as backend sources", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "export async function preview(formData) {",
+        "  \"use server\";",
+        "  const target = formData.get('url');",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ssrf",
+          filePath: path.join(root, "app/actions/proxy.ts"),
+          line: 4,
+          evidence: "fetch(target)"
+        })
+      ])
+    );
+  });
+
+  test("backend SSRF scan does not trust inline dummy validators", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/proxy/route.ts": [
+        "const validateOutboundUrl = (url) => url;",
+        "export async function GET(req) {",
+        "  const target = req.nextUrl.searchParams.get('url');",
+        "  const safeTarget = validateOutboundUrl(target);",
+        "  return fetch(safeTarget);",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ssrf",
+          line: 5,
+          evidence: "fetch(safeTarget)"
+        })
+      ])
+    );
+  });
+
+  test("backend SSRF scan propagates taint through destructuring and reassignments", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "pages/api/avatar.ts": [
+        "export default async function handler(req, res) {",
+        "  const { profile: { avatarUrl } } = req.body;",
+        "  const alias = avatarUrl;",
+        "  let target;",
+        "  target = alias;",
+        "  await fetch(target);",
+        "  res.json({ ok: true });",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ssrf",
+          line: 6,
+          evidence: "fetch(target)"
+        })
+      ])
+    );
+  });
+
+  test("backend SSRF scan ignores dynamic outbound URLs that pass known validators", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/proxy/route.ts": [
+        "import { validateOutboundUrl } from '@/lib/security/url';",
+        "export async function GET(req) {",
+        "  const target = req.nextUrl.searchParams.get('url');",
+        "  const safeTarget = validateOutboundUrl(target);",
+        "  return fetch(safeTarget);",
+        "}",
+        ""
+      ].join("\n"),
+      "app/api/proxy/checked.ts": [
+        "import { assertSafeRedirectUrl } from '@/server/security/url';",
+        "export async function GET(req) {",
+        "  const target = req.query.url;",
+        "  assertSafeRedirectUrl(target);",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings.some((finding) => finding.ruleId === "ssrf")).toBe(false);
+  });
+
+  test("scanBackendSource targets backend files and ignores frontend dynamic fetches", async () => {
+    const { scanBackendSource } = require("../index");
+    const root = makeProject({
+      "app/api/proxy/route.ts": [
+        "export async function GET(req) {",
+        "  const target = req.query.url;",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n"),
+      "app/page.tsx": [
+        "\"use client\";",
+        "export function Page({ url }) {",
+        "  fetch(url);",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanBackendSource(root);
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      ruleId: "ssrf",
+      filePath: path.join(root, "app/api/proxy/route.ts")
+    });
+  });
+
+  test("scanBackendSource includes use server files outside API directories", async () => {
+    const { scanBackendSource } = require("../index");
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "\"use server\";",
+        "export async function proxy(formData) {",
+        "  const target = formData.get('url');",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanBackendSource(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ssrf",
+          filePath: path.join(root, "app/actions/proxy.ts"),
+          evidence: "fetch(target)"
+        })
+      ])
+    );
+  });
+
   test("preflight config is loaded from process cwd by default", async () => {
     const { loadPreflightPolicy } = require("../index");
     const root = makeProject({
