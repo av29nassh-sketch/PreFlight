@@ -28,7 +28,14 @@ const {
   applyScaffoldTransaction,
   findServerSideLeaks
 } = require("./scaffoldEngine");
-const { activateLicenseKey: activateDefaultLicenseKey } = require("./src/licensing/licenseManager");
+const {
+  loadPreflightConfig,
+  writePreflightConfigTemplate
+} = require("./src/config/configLoader");
+const {
+  activateLicenseKey: activateDefaultLicenseKey,
+  verifyFixPermission: verifyDefaultFixPermission
+} = require("./src/licensing/licenseManager");
 const { startMcpServer: startDefaultMcpServer } = require("./src/mcp/server");
 const { installPreCommitHook: installDefaultPreCommitHook } = require("./src/cli/init");
 const {
@@ -295,24 +302,30 @@ function normalizePolicy(policy = {}) {
     ignorePaths: Array.isArray(policy.ignorePaths) ? policy.ignorePaths.filter((item) => typeof item === "string") : [],
     ignoreRules: new Set(
       Array.isArray(policy.ignoreRules) ? policy.ignoreRules.filter((item) => typeof item === "string") : []
-    )
+    ),
+    customRules: Array.isArray(policy.customRules) ? policy.customRules : []
   };
 }
 
 async function loadPreflightPolicy(rootDir = process.cwd(), options = {}) {
   const warn = options.warn || ((message) => createLogger({ stderr: process.stderr }).warn(message));
-  const configPath = path.join(path.resolve(rootDir), PREFLIGHT_POLICY_FILE);
-  try {
-    const raw = await fs.readFile(configPath, "utf8");
-    return normalizePolicy(JSON.parse(raw));
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return normalizePolicy();
-    }
+  const config = await loadPreflightConfig(rootDir, { warn });
+  const hasCustomRules = config.customRules.length > 0;
 
-    warn("Warning: preflight.config.json contains invalid JSON and was ignored.");
-    return normalizePolicy();
+  if (!hasCustomRules) {
+    return normalizePolicy(config);
   }
+
+  const verifyFixPermission = options.verifyFixPermission || verifyDefaultFixPermission;
+  const permission = await verifyFixPermission({ cwd: path.resolve(rootDir) });
+  if (!permission.allowed || !["pro", "solo", "teams"].includes(permission.tier)) {
+    return normalizePolicy({
+      ...config,
+      customRules: []
+    });
+  }
+
+  return normalizePolicy(config);
 }
 
 function matchesIgnorePath(relativePath, ignorePattern) {
@@ -341,6 +354,31 @@ function matchesIgnorePath(relativePath, ignorePattern) {
 
 function isIgnoredPath(relativePath, policy = normalizePolicy()) {
   return policy.ignorePaths.some((ignorePath) => matchesIgnorePath(relativePath, ignorePath));
+}
+
+function globPatternToRegex(pattern) {
+  const normalized = toPosix(pattern).replace(/^\/+/, "");
+  const placeholder = "__PREFLIGHT_GLOBSTAR__";
+  const escaped = normalized
+    .replace(/\*\*/g, placeholder)
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, "[^/]*")
+    .replace(new RegExp(placeholder, "g"), ".*");
+  return new RegExp(`^${escaped}$`);
+}
+
+function matchesTargetFile(relativePath, targetPattern) {
+  const normalizedPath = toPosix(relativePath).replace(/^\/+/, "");
+  const normalizedPattern = toPosix(targetPattern).replace(/^\/+/, "");
+  if (!normalizedPattern) {
+    return false;
+  }
+
+  if (!normalizedPattern.includes("*")) {
+    return normalizedPath === normalizedPattern || normalizedPath.startsWith(`${normalizedPattern}/`);
+  }
+
+  return globPatternToRegex(normalizedPattern).test(normalizedPath);
 }
 
 function applyPolicy(findings, policy = normalizePolicy(), rootDir = process.cwd()) {
@@ -1065,6 +1103,139 @@ function scanBackendStrings({ filePath, relativePath, sourceCode, tree, includeS
   return dedupeFindings(findings);
 }
 
+function severityFromCustomRule(rule) {
+  return rule.severity === "warn" ? "warning" : "critical";
+}
+
+function customRuleFinding({ rule, filePath, line, evidence }) {
+  return finding({
+    ruleId: "custom-team-rule",
+    severity: severityFromCustomRule(rule),
+    filePath,
+    line,
+    message: `Custom team rule violated: ${rule.name}.`,
+    evidence,
+    customRuleName: rule.name
+  });
+}
+
+function extractImportPath(importText) {
+  const fromImport = /\bfrom\s+['"]([^'"]+)['"]/.exec(importText);
+  if (fromImport) {
+    return fromImport[1];
+  }
+
+  const bareImport = /^\s*import\s+['"]([^'"]+)['"]/.exec(importText);
+  return bareImport ? bareImport[1] : null;
+}
+
+function scanForbiddenImportRule({ filePath, sourceCode, tree, rule }) {
+  const findings = [];
+  walkTree(tree.rootNode, (node) => {
+    if (node.type !== "import_statement") {
+      return;
+    }
+
+    const importPath = extractImportPath(textFromNode(sourceCode, node));
+    if (importPath !== rule.forbiddenPattern.importPath) {
+      return;
+    }
+
+    findings.push(customRuleFinding({
+      rule,
+      filePath,
+      line: lineFromStringIndex(sourceCode, node.startIndex),
+      evidence: `forbidden import ${importPath}`
+    }));
+  });
+
+  return findings;
+}
+
+function escapeRegexLiteral(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function scanForbiddenMethodCallRule({ filePath, sourceCode, tree, rule }) {
+  const findings = [];
+  const { object, method } = rule.forbiddenPattern;
+  const methodPattern = object
+    ? new RegExp(`\\b${escapeRegexLiteral(object)}\\s*\\.\\s*${escapeRegexLiteral(method)}$`)
+    : new RegExp(`(?:^|\\.)\\s*${escapeRegexLiteral(method)}$`);
+
+  walkTree(tree.rootNode, (node) => {
+    if (node.type !== "call_expression") {
+      return;
+    }
+
+    const callee = childForField(node, "function");
+    const calleeText = callee ? textFromNode(sourceCode, callee).replace(/\s+/g, "") : "";
+    if (!methodPattern.test(calleeText)) {
+      return;
+    }
+
+    findings.push(customRuleFinding({
+      rule,
+      filePath,
+      line: lineFromStringIndex(sourceCode, node.startIndex),
+      evidence: `forbidden method call ${object ? `${object}.` : ""}${method}`
+    }));
+  });
+
+  return findings;
+}
+
+function hasRequiredWrapperCall({ sourceCode, tree, wrapper }) {
+  let found = false;
+  walkTree(tree.rootNode, (node) => {
+    if (found || node.type !== "call_expression") {
+      return;
+    }
+
+    const callee = childForField(node, "function");
+    if (callee && textFromNode(sourceCode, callee).trim() === wrapper) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+function scanRequiredWrapperRule({ filePath, sourceCode, tree, rule }) {
+  const wrapper = rule.forbiddenPattern.wrapper;
+  if (hasRequiredWrapperCall({ sourceCode, tree, wrapper })) {
+    return [];
+  }
+
+  return [
+    customRuleFinding({
+      rule,
+      filePath,
+      line: 1,
+      evidence: `missing required wrapper ${wrapper}`
+    })
+  ];
+}
+
+function scanCustomTeamRules({ filePath, relativePath, sourceCode, tree, policy }) {
+  const rules = Array.isArray(policy.customRules) ? policy.customRules : [];
+  const matchingRules = rules.filter((rule) =>
+    rule.targetFiles.some((targetPattern) => matchesTargetFile(relativePath, targetPattern))
+  );
+  const findings = [];
+
+  for (const rule of matchingRules) {
+    if (rule.forbiddenPattern.type === "forbidden_import") {
+      findings.push(...scanForbiddenImportRule({ filePath, sourceCode, tree, rule }));
+    } else if (rule.forbiddenPattern.type === "forbidden_method_call") {
+      findings.push(...scanForbiddenMethodCallRule({ filePath, sourceCode, tree, rule }));
+    } else if (rule.forbiddenPattern.type === "required_wrapper") {
+      findings.push(...scanRequiredWrapperRule({ filePath, sourceCode, tree, rule }));
+    }
+  }
+
+  return dedupeFindings(findings);
+}
+
 function scanBackendSource() {
   return [];
 }
@@ -1173,7 +1344,7 @@ function scanArchitecturalLeakFindings({ filePath, sourceCode, tree }) {
   );
 }
 
-function scanParsedSourceFile({ filePath, relativePath, sourceCode, tree }) {
+function scanParsedSourceFile({ filePath, relativePath, sourceCode, tree, policy = normalizePolicy() }) {
   const credentialRequiresClient =
     isInsideNextFrontend(relativePath) && !isBackendApiRoute(relativePath);
 
@@ -1193,7 +1364,8 @@ function scanParsedSourceFile({ filePath, relativePath, sourceCode, tree }) {
       includeStandaloneBackend: true
     }),
     ...scanSqlConcatenationFindings({ filePath, sourceCode, tree }),
-    ...scanArchitecturalLeakFindings({ filePath, sourceCode, tree })
+    ...scanArchitecturalLeakFindings({ filePath, sourceCode, tree }),
+    ...scanCustomTeamRules({ filePath, relativePath, sourceCode, tree, policy })
   ];
 }
 
@@ -1638,7 +1810,8 @@ async function scanFiles(rootDir, files, options = {}) {
         filePath,
         relativePath,
         sourceCode: parsed.sourceCode,
-        tree: parsed.tree
+        tree: parsed.tree,
+        policy
       }));
     } finally {
       parsed.tree.delete?.();
@@ -2306,7 +2479,7 @@ async function installMcpForKnownClients(options = {}) {
 
 function normalizeCliArgs(argv) {
   const [nodePath, scriptPath, firstArg, ...rest] = argv;
-  const knownCommands = new Set(["scan", "scan-diff", "audit", "activate", "apply-fix", "install-mcp", "init", "mcp", "upgrade", "help"]);
+  const knownCommands = new Set(["scan", "scan-diff", "audit", "activate", "apply-fix", "install-mcp", "init", "init-config", "mcp", "upgrade", "help"]);
 
   if (!firstArg || firstArg.startsWith("-") || !knownCommands.has(firstArg)) {
     return [nodePath, scriptPath, "scan", ...(firstArg ? [firstArg, ...rest] : rest)];
@@ -2349,6 +2522,7 @@ async function runCli(argv = process.argv, options = {}) {
   const activateLicenseKey = options.activateLicenseKey || activateDefaultLicenseKey;
   const auditDependencyRunner = options.auditDependencies || auditDependencies;
   const startMcpServer = options.startMcpServer || startDefaultMcpServer;
+  const verifyFixPermission = options.verifyFixPermission || verifyDefaultFixPermission;
   const program = new Command();
   program
     .name("preflight")
@@ -2439,6 +2613,24 @@ async function runCli(argv = process.argv, options = {}) {
     });
 
   program
+    .command("init-config")
+    .description("Write a default PreFlight team ruleset template.")
+    .argument("[directory]", "repository directory", process.cwd())
+    .option("--force", "overwrite an existing preflight.config.json")
+    .action(async (directory, options) => {
+      try {
+        const configPath = await writePreflightConfigTemplate(path.resolve(directory), {
+          overwrite: options.force === true
+        });
+        process.stdout.write(`PreFlight config template written: ${configPath}\n`);
+        process.exitCode = 0;
+      } catch (error) {
+        process.stderr.write(`${error.message}\n`);
+        process.exitCode = 1;
+      }
+    });
+
+  program
     .command("upgrade")
     .description("Show PreFlight Pro closed beta access instructions.")
     .action(async () => {
@@ -2520,6 +2712,14 @@ async function runCli(argv = process.argv, options = {}) {
     const requestedStats = await fs.stat(requestedPath);
     const isSingleFileScan = requestedStats.isFile();
     const rootDir = isSingleFileScan ? process.cwd() : requestedPath;
+    if (options.fix) {
+      const permission = await verifyFixPermission({ cwd: rootDir });
+      if (!permission.allowed) {
+        process.stderr.write(`${permission.message}\n`);
+        process.exitCode = 1;
+        return;
+      }
+    }
     if (options.fix && isSingleFileScan) {
       const checkoutRouteResult = await applyCheckoutRouteDemoRemediation(requestedPath, { rootDir });
       if (checkoutRouteResult) {

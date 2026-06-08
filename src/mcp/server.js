@@ -117,7 +117,8 @@ function registerMcpTools(server, options = {}) {
       inputSchema: makePreflightFixSchema(z)
     },
     async ({ directory, diff = false }) => {
-      const permission = await verifyFixPermission();
+      const rootDir = path.resolve(cwd, directory || ".");
+      const permission = await verifyFixPermission({ cwd: rootDir });
       if (!permission.allowed) {
         return {
           isError: true,
@@ -125,7 +126,6 @@ function registerMcpTools(server, options = {}) {
         };
       }
 
-      const rootDir = path.resolve(cwd, directory || ".");
       const policy = await loadPreflightPolicy(cwd);
       const findings = diff ? await scanProjectDiff(rootDir, { policy }) : await scanProject(rootDir, { policy });
       const fixResult = await applyScanFixes(findings, { ask: async () => "y" });

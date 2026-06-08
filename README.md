@@ -22,7 +22,7 @@ AI injected a fatal flaw.
 
 Examples: **exposed frontend secrets**, raw database writes, hardcoded billing keys, or missing Supabase RLS protections.
 
-The commit is blocked. PreFlight explains the issue and requires explicit approval before applying an auto-patch.
+The commit is flagged. PreFlight explains the issue and can apply an interactive auto-patch when run with the --fix flag or via the MCP preflight_fix tool.
 
 ### 🟡 HIGH-RISK DRIFT (Needs Runtime Check)
 

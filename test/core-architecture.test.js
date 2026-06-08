@@ -303,6 +303,111 @@ describe("PreFlight core modular architecture", () => {
     ).rejects.toThrow("Cloud verdict must include manual_qa_line");
   });
 
+  test("micro-router defaults to local Ollama-compatible provider without requiring a cloud key", () => {
+    const { resolveMicroRouterProvider } = require("../src/router/cloud");
+
+    expect(resolveMicroRouterProvider({})).toEqual({
+      apiKey: "ollama",
+      baseURL: "http://localhost:11434/v1",
+      model: "qwen2.5-coder:0.5b",
+      provider: "ollama",
+      timeoutMs: 5000
+    });
+  });
+
+  test("micro-router prefers OpenRouter when its free API key is configured", () => {
+    const { resolveMicroRouterProvider } = require("../src/router/cloud");
+
+    expect(resolveMicroRouterProvider({
+      OPENROUTER_API_KEY: "openrouter-key",
+      PREFLIGHT_MICRO_MODEL: "qwen/qwen3-coder:free"
+    })).toEqual({
+      apiKey: "openrouter-key",
+      baseURL: "https://openrouter.ai/api/v1",
+      model: "qwen/qwen3-coder:free",
+      provider: "openrouter",
+      timeoutMs: 5000
+    });
+  });
+
+  test("micro-router sends a compact diff payload and parses strict boolean JSON", async () => {
+    const {
+      MICRO_ROUTER_SYSTEM_PROMPT,
+      MicroRouter
+    } = require("../src/router/cloud");
+    const requests = [];
+    const fakeClient = {
+      chat: {
+        completions: {
+          create: async (request, requestOptions) => {
+            requests.push({ request, requestOptions });
+            return {
+              choices: [{ message: { content: "{\"requires_deep_scan\":false}" } }]
+            };
+          }
+        }
+      }
+    };
+
+    const router = new MicroRouter({
+      client: fakeClient,
+      env: {},
+      model: "micro-test",
+      timeoutMs: 1234
+    });
+    const result = await router.evaluate([
+      "diff --git a/app.js b/app.js",
+      "index 111..222 100644",
+      "--- a/app.js",
+      "+++ b/app.js",
+      "@@ -1,2 +1,2 @@",
+      "-const count = 1;",
+      "+const count = 2;",
+      " const untouched = true;"
+    ].join("\n"));
+
+    expect(result).toEqual({
+      requires_deep_scan: false,
+      routed: "micro",
+      fallback: false
+    });
+    expect(requests[0].request).toMatchObject({
+      model: "micro-test",
+      response_format: { type: "json_object" },
+      temperature: 0
+    });
+    expect(requests[0].request.messages[0]).toEqual({
+      role: "system",
+      content: MICRO_ROUTER_SYSTEM_PROMPT
+    });
+    expect(requests[0].request.messages[1].content).toContain("+const count = 2;");
+    expect(requests[0].request.messages[1].content).not.toContain("index 111..222");
+    expect(requests[0].requestOptions).toEqual({ timeout: 1234 });
+  });
+
+  test("micro-router fails closed when the local/free model throws", async () => {
+    const { MicroRouter } = require("../src/router/cloud");
+    const router = new MicroRouter({
+      client: {
+        chat: {
+          completions: {
+            create: async () => {
+              throw new Error("local model unavailable");
+            }
+          }
+        }
+      },
+      env: {}
+    });
+
+    await expect(router.evaluate("+const safe = true;")).resolves.toEqual({
+      requires_deep_scan: true,
+      routed: "micro",
+      fallback: true,
+      reason: "local model unavailable"
+    });
+  });
+
   test("scan-diff CLI reads stdin and exits non-zero for fuzzy context", () => {
     const root = makeProject({});
     const result = runNode([

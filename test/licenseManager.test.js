@@ -7,6 +7,8 @@ const ACTIVATION_MESSAGE = "\u2705 PreFlight Pro activated successfully! Unlimit
 const EMAIL_MISMATCH_MESSAGE = "\u274c Email does not match the purchase record.";
 const EXHAUSTED_MESSAGE =
   "\u26a0\ufe0f Free fixes exhausted (5/5). Upgrade to PreFlight Pro for unlimited AI auto-fixes for a one-time payment of $49 / \u20b91999: https://yourwebsite.com/buy";
+const ORG_ACCOUNT_MESSAGE =
+  "🔴 Org Account Detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator.";
 
 function makeHome() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-license-"));
@@ -25,6 +27,118 @@ afterEach(() => {
 });
 
 describe("licenseManager", () => {
+  test("parses GitHub and GitLab remote owners from HTTPS and SSH URLs", () => {
+    const { parseRepositoryRemote } = require("../src/licensing/licenseManager");
+
+    expect(parseRepositoryRemote("https://github.com/CompanyOrg/preflight.git")).toEqual({
+      host: "github.com",
+      owner: "CompanyOrg",
+      repo: "preflight",
+      remoteUrl: "https://github.com/CompanyOrg/preflight.git"
+    });
+    expect(parseRepositoryRemote("git@gitlab.com:CompanyOrg/preflight.git")).toEqual({
+      host: "gitlab.com",
+      owner: "CompanyOrg",
+      repo: "preflight",
+      remoteUrl: "git@gitlab.com:CompanyOrg/preflight.git"
+    });
+  });
+
+  test("reads origin URL from the local .git/config without shelling out", () => {
+    const { readGitRemoteOriginUrl } = require("../src/licensing/licenseManager");
+    const root = makeHome();
+    fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".git", "config"),
+      [
+        "[core]",
+        "  repositoryformatversion = 0",
+        "[remote \"origin\"]",
+        "  url = git@github.com:CompanyOrg/preflight.git",
+        "  fetch = +refs/heads/*:refs/remotes/origin/*",
+        ""
+      ].join("\n")
+    );
+
+    expect(readGitRemoteOriginUrl({ cwd: root })).toBe("git@github.com:CompanyOrg/preflight.git");
+  });
+
+  test("blocks a solo Pro key when the repository owner is an organization", async () => {
+    const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
+    const homeDir = makeHome();
+    const root = makeHome();
+    let validated = false;
+    fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".git", "config"),
+      ["[remote \"origin\"]", "  url = https://github.com/CompanyOrg/preflight.git", ""].join("\n")
+    );
+    await writeConfig({ freeFixesUsed: 0, licenseKey: null, instanceId: null }, { homeDir });
+
+    const result = await verifyFixPermission({
+      cwd: root,
+      env: {
+        PREFLIGHT_PRO_KEY: "solo-license-key",
+        PREFLIGHT_LICENSE_TIER: "solo"
+      },
+      homeDir,
+      requestLicenseValidation: async () => {
+        validated = true;
+        return { valid: true };
+      }
+    });
+
+    expect(validated).toBe(false);
+    expect(result).toEqual({
+      allowed: false,
+      tier: "solo",
+      message: ORG_ACCOUNT_MESSAGE,
+      repository: {
+        host: "github.com",
+        owner: "CompanyOrg",
+        repo: "preflight",
+        remoteUrl: "https://github.com/CompanyOrg/preflight.git"
+      }
+    });
+  });
+
+  test("allows a Teams key on an organization repository", async () => {
+    const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
+    const homeDir = makeHome();
+    const root = makeHome();
+    fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".git", "config"),
+      ["[remote \"origin\"]", "  url = https://github.com/CompanyOrg/preflight.git", ""].join("\n")
+    );
+    await writeConfig({ freeFixesUsed: 0, licenseKey: null, instanceId: null }, { homeDir });
+
+    const result = await verifyFixPermission({
+      cwd: root,
+      env: {
+        PREFLIGHT_PRO_KEY: "teams-license-key",
+        PREFLIGHT_LICENSE_TIER: "teams"
+      },
+      homeDir,
+      requestLicenseValidation: async () => ({ valid: true })
+    });
+
+    expect(result).toEqual({ allowed: true, tier: "teams" });
+  });
+
+  test("defaults safely when no Git remote origin exists", async () => {
+    const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
+    const homeDir = makeHome();
+    const root = makeHome();
+    await writeConfig({ freeFixesUsed: 0, licenseKey: null, instanceId: null }, { homeDir });
+
+    await expect(verifyFixPermission({ cwd: root, homeDir, env: {} })).resolves.toEqual({
+      allowed: true,
+      tier: "free",
+      remaining: 5
+    });
+  });
+
   test("activates a Lemon Squeezy license and saves its instance when purchase email matches", async () => {
     const { activateLicenseKey, readConfig } = require("../src/licensing/licenseManager");
     const homeDir = makeHome();

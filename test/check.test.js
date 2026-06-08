@@ -41,6 +41,7 @@ function runNode(args, cwd, options = {}) {
   return spawnSync(process.execPath, args, {
     cwd,
     encoding: "utf8",
+    env: options.env ? { ...process.env, ...options.env } : process.env,
     input: options.input
   });
 }
@@ -764,6 +765,32 @@ describe("PreFlight Check", () => {
     );
   });
 
+  test("scan --fix blocks solo Pro keys on organization repositories before scanning", () => {
+    const root = makeProject({
+      "dangerous-code.js": "const stripe_key = \"" + STRIPE_KEY + "\";\n"
+    });
+    fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".git", "config"),
+      ["[remote \"origin\"]", "  url = https://github.com/CompanyOrg/preflight.git", ""].join("\n")
+    );
+
+    const result = runNode([path.join(__dirname, "..", "index.js"), "scan", root, "--fix"], root, {
+      env: {
+        PREFLIGHT_PRO_KEY: "solo-license-key",
+        PREFLIGHT_LICENSE_TIER: "solo"
+      },
+      input: "y\n"
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "🔴 Org Account Detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator."
+    );
+    expect(result.stdout).not.toContain("[PREFLIGHT PRO] Vulnerability found");
+    expect(fs.readFileSync(path.join(root, "dangerous-code.js"), "utf8")).toBe("const stripe_key = \"" + STRIPE_KEY + "\";\n");
+  });
+
   test("scan --fix leaves the file untouched when the user declines", () => {
     const contents = "const stripe_key = \"" + STRIPE_KEY + "\";\n";
     const root = makeProject({
@@ -1176,6 +1203,135 @@ describe("PreFlight Check", () => {
     );
   });
 
+  test("custom team rule blocks forbidden imports when a Teams license validates", async () => {
+    const { loadPreflightPolicy, scanProject } = require("../index");
+    const root = makeProject({
+      "preflight.config.json": JSON.stringify({
+        custom_rules: [
+          {
+            name: "No direct Supabase client imports",
+            severity: "block",
+            target_files: "app/api/**/*.ts",
+            forbidden_pattern: {
+              type: "forbidden_import",
+              import_path: "@supabase/supabase-js"
+            }
+          }
+        ]
+      }),
+      "app/api/profile/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "export function GET() { return Response.json({ ok: true }); }",
+        ""
+      ].join("\n")
+    });
+
+    const policy = await loadPreflightPolicy(root, {
+      verifyFixPermission: async () => ({ allowed: true, tier: "teams" })
+    });
+    const findings = await scanProject(root, { policy });
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "custom-team-rule",
+          customRuleName: "No direct Supabase client imports",
+          severity: "critical",
+          filePath: path.join(root, "app/api/profile/route.ts"),
+          line: 1,
+          evidence: "forbidden import @supabase/supabase-js"
+        })
+      ])
+    );
+  });
+
+  test("custom team rules detect forbidden method calls and missing wrappers", async () => {
+    const { loadPreflightPolicy, scanProject } = require("../index");
+    const root = makeProject({
+      "preflight.config.json": JSON.stringify({
+        custom_rules: [
+          {
+            name: "No direct tenant delete",
+            severity: "warn",
+            target_files: "app/api/**/*.ts",
+            forbidden_pattern: {
+              type: "forbidden_method_call",
+              object: "tenantClient",
+              method: "delete"
+            }
+          },
+          {
+            name: "Route handlers require tenant wrapper",
+            severity: "block",
+            target_files: "app/api/**/*.ts",
+            forbidden_pattern: {
+              type: "required_wrapper",
+              wrapper: "withTenantGuard"
+            }
+          }
+        ]
+      }),
+      "app/api/tenant/route.ts": [
+        "export async function POST() {",
+        "  return tenantClient.delete('tenant-1');",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const policy = await loadPreflightPolicy(root, {
+      verifyFixPermission: async () => ({ allowed: true, tier: "pro" })
+    });
+    const findings = await scanProject(root, { policy });
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "custom-team-rule",
+          customRuleName: "No direct tenant delete",
+          severity: "warning",
+          line: 2,
+          evidence: "forbidden method call tenantClient.delete"
+        }),
+        expect.objectContaining({
+          ruleId: "custom-team-rule",
+          customRuleName: "Route handlers require tenant wrapper",
+          severity: "critical",
+          line: 1,
+          evidence: "missing required wrapper withTenantGuard"
+        })
+      ])
+    );
+  });
+
+  test("custom team rules are not merged without a validated paid license", async () => {
+    const { loadPreflightPolicy, scanProject } = require("../index");
+    const root = makeProject({
+      "preflight.config.json": JSON.stringify({
+        custom_rules: [
+          {
+            name: "No direct Supabase client imports",
+            severity: "block",
+            target_files: "app/api/**/*.ts",
+            forbidden_pattern: {
+              type: "forbidden_import",
+              import_path: "@supabase/supabase-js"
+            }
+          }
+        ]
+      }),
+      "app/api/profile/route.ts": "import { createClient } from '@supabase/supabase-js';\n"
+    });
+
+    const policy = await loadPreflightPolicy(root, {
+      verifyFixPermission: async () => ({ allowed: true, tier: "free" })
+    });
+    const findings = await scanProject(root, { policy });
+
+    expect(policy.customRules).toEqual([]);
+    expect(findings.some((finding) => finding.ruleId === "custom-team-rule")).toBe(false);
+  });
+
   test("preflight config is loaded from process cwd by default", async () => {
     const { loadPreflightPolicy } = require("../index");
     const root = makeProject({
@@ -1242,6 +1398,27 @@ describe("PreFlight Check", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("Warning: preflight.config.json contains invalid JSON and was ignored.");
     expect(result.stdout).toContain("PreFlight Check found 0 issues.");
+  });
+
+  test("init-config writes a default custom rules template", () => {
+    const root = makeProject({});
+
+    const result = runNode([path.join(__dirname, "..", "index.js"), "init-config"], root);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("PreFlight config template written:");
+    const configPath = path.join(root, "preflight.config.json");
+    expect(fs.existsSync(configPath)).toBe(true);
+    const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(parsed.custom_rules[0]).toMatchObject({
+      name: "No direct Supabase service role clients in route handlers",
+      severity: "block",
+      target_files: ["app/api/**/*.ts", "app/api/**/*.tsx"],
+      forbidden_pattern: {
+        type: "forbidden_import",
+        import_path: "@supabase/supabase-js"
+      }
+    });
   });
 
   test("diff scan only scans changed source and sql files", async () => {
