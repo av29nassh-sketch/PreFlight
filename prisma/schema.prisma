@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum LicenseTier {
+  SOLO
+  TEAMS
+  ENTERPRISE
+}
+
+enum LicenseStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum FindingSeverity {
+  INFO
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum FindingState {
+  RED
+  YELLOW
+  GREEN
+}
+
+model User {
+  id             String        @id @default(cuid())
+  email          String        @unique
+  name           String?
+  githubHandle   String?
+  role           String        @default("member")
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  licenseKeys    LicenseKey[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([organizationId])
+}
+
+model Organization {
+  id          String                   @id @default(cuid())
+  name        String
+  slug        String                   @unique
+  domains     String[]                 @default([])
+  githubOrgs  String[]                 @default([])
+  gitlabGroups String[]                @default([])
+  users       User[]
+  licenseKeys LicenseKey[]
+  telemetry   VulnerabilityTelemetry[]
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+}
+
+model LicenseKey {
+  id             String                   @id @default(cuid())
+  tokenHash      String                   @unique
+  tier           LicenseTier
+  status         LicenseStatus            @default(ACTIVE)
+  usageCount     Int                      @default(0)
+  seats          Int                      @default(1)
+  label          String?
+  userId         String?
+  user           User?                    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  organizationId String?
+  organization   Organization?            @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  telemetry      VulnerabilityTelemetry[]
+  expiresAt      DateTime?
+  lastUsedAt     DateTime?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([status, tier])
+}
+
+model VulnerabilityTelemetry {
+  id             String        @id @default(cuid())
+  repoName       String
+  repoOwner      String?
+  remoteHost     String?
+  ruleId         String
+  severity       FindingSeverity
+  filePath       String        @map("file_path")
+  state          FindingState
+  source         String        @default("cli")
+  cliVersion     String?
+  branch         String?
+  commitSha      String?
+  metadata       Json?
+  licenseKeyId   String?
+  licenseKey     LicenseKey?   @relation(fields: [licenseKeyId], references: [id], onDelete: SetNull)
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  createdAt      DateTime      @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([licenseKeyId, createdAt])
+  @@index([repoName, createdAt])
+  @@index([ruleId, state])
+  @@map("vulnerability_telemetry")
+}
