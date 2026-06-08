@@ -142,6 +142,26 @@ describe("PreFlight core modular architecture", () => {
     expect(billingDrift.findings[0].kind).toBe("billing-webhook-drift");
   });
 
+  test("scanner catches tautological Supabase RLS predicates in diffs", () => {
+    const { scanDiff, STATES } = require("../src/ast/scanner");
+
+    const numericTautology = scanDiff([
+      "diff --git a/supabase/migrations/002_policy.sql b/supabase/migrations/002_policy.sql",
+      "+++ b/supabase/migrations/002_policy.sql",
+      "+create policy \"open select\" on profiles for select using (1 = 1);"
+    ].join("\n"));
+    const stringTautology = scanDiff([
+      "diff --git a/supabase/migrations/003_policy.sql b/supabase/migrations/003_policy.sql",
+      "+++ b/supabase/migrations/003_policy.sql",
+      "+create policy \"open insert\" on profiles for insert with check ('admin' = 'admin');"
+    ].join("\n"));
+
+    expect(numericTautology.state).toBe(STATES.CONFIRMED_FINDING);
+    expect(numericTautology.findings[0].kind).toBe("supabase-rls");
+    expect(stringTautology.state).toBe(STATES.CONFIRMED_FINDING);
+    expect(stringTautology.findings[0].kind).toBe("supabase-rls");
+  });
+
   test("interactive Auto-Heal prompt prints a colorized diff and requires explicit y", async () => {
     const { promptForAutoHeal } = require("../src/ast/scanner");
     const output = { text: "", write(chunk) { this.text += chunk; } };

@@ -189,11 +189,21 @@ function findRawSqlFindings(addedLines) {
   return findings;
 }
 
+function hasTautologicalRlsPredicate(text) {
+  const literal = String.raw`(?:\d+(?:\.\d+)?|'(?:''|[^'])*'|"(?:[^"]|"")*"|true|false)`;
+  const pattern = new RegExp(String.raw`\b(?:using|with\s+check)\s*\(\s*(${literal})\s*=\s*\1\s*\)`, "i");
+  return pattern.test(String(text || ""));
+}
+
 function findSupabaseRlsFindings(addedLines) {
   const findings = [];
   for (const addedLine of addedLines) {
     const text = addedLine.text;
-    if (/\busing\s*\(\s*true\s*\)/i.test(text) || /\bwith\s+check\s*\(\s*true\s*\)/i.test(text)) {
+    if (
+      /\busing\s*\(\s*true\s*\)/i.test(text) ||
+      /\bwith\s+check\s*\(\s*true\s*\)/i.test(text) ||
+      hasTautologicalRlsPredicate(text)
+    ) {
       findings.push({
         kind: "supabase-rls",
         label: "Supabase policy allows all rows",

@@ -102,6 +102,33 @@ describe("PreFlight Check", () => {
     );
   });
 
+  test("flags statically concatenated Stripe secrets before regex checks", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/dashboard/page.tsx": [
+        "\"use client\";",
+        "",
+        "export default function Dashboard() {",
+        "  const key = \"sk\" + \"_live_\" + \"1234567890abcdef\";",
+        "  return <main>{key}</main>;",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "frontend-secret",
+          filePath: path.join(root, "app/dashboard/page.tsx"),
+          line: 4,
+          evidence: "Stripe Secret Key"
+        })
+      ])
+    );
+  });
+
   test("flags Supabase service role environment references in pages components", async () => {
     const { scanProject } = require("../index");
     const root = makeProject({
@@ -121,6 +148,40 @@ describe("PreFlight Check", () => {
           ruleId: "frontend-secret",
           filePath: path.join(root, "pages/index.tsx"),
           line: 2
+        })
+      ])
+    );
+  });
+
+  test("flags service-role Supabase clients passed into JSX props", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/admin/page.tsx": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "import ClientPanel from './ClientPanel';",
+        "",
+        "export default function AdminPage() {",
+        "  const adminClient = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);",
+        "  return <ClientPanel supabase={adminClient} />;",
+        "}"
+      ].join("\n"),
+      "app/admin/ClientPanel.tsx": [
+        "\"use client\";",
+        "export default function ClientPanel() {",
+        "  return null;",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "frontend-secret",
+          filePath: path.join(root, "app/admin/page.tsx"),
+          line: 6,
+          evidence: "Supabase service role client passed as JSX prop"
         })
       ])
     );
@@ -247,6 +308,32 @@ describe("PreFlight Check", () => {
     const findings = await scanProject(root);
 
     expect(findings.filter((finding) => finding.ruleId === "missing-rls")).toHaveLength(0);
+  });
+
+  test("flags tautological Supabase RLS policy predicates", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "supabase/migrations/20260602000002_create_profiles.sql": [
+        "create table public.profiles (",
+        "  id uuid primary key",
+        ");",
+        "alter table public.profiles enable row level security;",
+        "create policy \"tautology\" on public.profiles for select using ('admin' = 'admin');"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "missing-rls",
+          filePath: path.join(root, "supabase/migrations/20260602000002_create_profiles.sql"),
+          line: 5,
+          evidence: "tautological RLS predicate"
+        })
+      ])
+    );
   });
 
   test("renders a terminal-friendly report", () => {
@@ -1512,6 +1599,35 @@ describe("PreFlight Check", () => {
           ruleId: "ssrf",
           line: 7,
           evidence: "https.request(target)"
+        })
+      ])
+    );
+  });
+
+  test("backend SSRF scan propagates taint through object mapping helpers", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "export async function preview(formData) {",
+        "  \"use server\";",
+        "  const mapped = Object.fromEntries(formData);",
+        "  const copy = Object.assign({}, mapped);",
+        "  const params = { ...copy };",
+        "  return fetch(params.url);",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ssrf",
+          filePath: path.join(root, "app/actions/proxy.ts"),
+          line: 6,
+          evidence: "fetch(params.url)"
         })
       ])
     );

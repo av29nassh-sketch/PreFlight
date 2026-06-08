@@ -1005,6 +1005,52 @@ function getCredentialFix(sourceCode, node, credential) {
   };
 }
 
+function staticStringFromNode(sourceCode, node) {
+  if (!node) {
+    return null;
+  }
+
+  if (node.type === "string") {
+    return unquoteTreeString(textFromNode(sourceCode, node));
+  }
+
+  if (node.type === "parenthesized_expression" && node.namedChildCount === 1) {
+    return staticStringFromNode(sourceCode, node.namedChild(0));
+  }
+
+  if (node.type !== "binary_expression") {
+    return null;
+  }
+
+  if (!/\+/.test(textFromNode(sourceCode, node))) {
+    return null;
+  }
+
+  const leftNode = childForField(node, "left") || node.namedChild(0);
+  const rightNode = childForField(node, "right") || node.namedChild(1);
+  const left = staticStringFromNode(sourceCode, leftNode);
+  const right = staticStringFromNode(sourceCode, rightNode);
+  return left === null || right === null ? null : `${left}${right}`;
+}
+
+function credentialFindingForStaticValue({ filePath, relativePath, sourceCode, node, value, requireClientComponent }) {
+  const credential = detectCredential(value);
+  const secretEvidence = credential?.label || detectSecret(value);
+  if (!secretEvidence) {
+    return null;
+  }
+
+  return finding({
+    ruleId: "frontend-secret",
+    severity: "critical",
+    filePath,
+    line: lineFromStringIndex(sourceCode, node.startIndex),
+    message: frontendSecretMessage(requireClientComponent),
+    evidence: secretEvidence,
+    fix: credential ? getCredentialFix(sourceCode, node, credential) : undefined
+  });
+}
+
 function scanCredentialStrings({ filePath, relativePath, sourceCode, tree, requireClientComponent }) {
   if (!isSourceFile(filePath)) {
     return [];
@@ -1036,6 +1082,22 @@ function scanCredentialStrings({ filePath, relativePath, sourceCode, tree, requi
           fix: credential ? getCredentialFix(sourceCode, node, credential) : undefined
         })
       );
+      return;
+    }
+
+    if (node.type === "binary_expression") {
+      const staticValue = staticStringFromNode(sourceCode, node);
+      const staticFinding = credentialFindingForStaticValue({
+        filePath,
+        relativePath,
+        sourceCode,
+        node,
+        value: staticValue,
+        requireClientComponent
+      });
+      if (staticFinding) {
+        findings.push(staticFinding);
+      }
       return;
     }
 
@@ -1122,6 +1184,61 @@ function scanBackendStrings({ filePath, relativePath, sourceCode, tree, includeS
   return dedupeFindings(findings);
 }
 
+function scanServiceRoleClientPropFindings({ filePath, relativePath, sourceCode, tree }) {
+  if (!isSourceFile(filePath) || !isInsideNextFrontend(relativePath)) {
+    return [];
+  }
+
+  const adminClientVariables = new Set();
+  walkTree(tree.rootNode, (node) => {
+    if (node.type !== "variable_declarator") {
+      return;
+    }
+
+    const nameNode = childForField(node, "name");
+    const valueNode = childForField(node, "value");
+    if (!nameNode || !valueNode) {
+      return;
+    }
+
+    const valueText = textFromNode(sourceCode, valueNode);
+    if (/\bcreateClient\s*\(/.test(valueText) && SERVICE_ROLE_NAME_PATTERN.test(valueText)) {
+      for (const name of collectPatternIdentifiers(nameNode, sourceCode)) {
+        adminClientVariables.add(name);
+      }
+    }
+  });
+
+  if (adminClientVariables.size === 0) {
+    return [];
+  }
+
+  const findings = [];
+  walkTree(tree.rootNode, (node) => {
+    if (node.type !== "jsx_attribute") {
+      return;
+    }
+
+    const attributeText = textFromNode(sourceCode, node);
+    for (const name of adminClientVariables) {
+      if (!new RegExp(`=\\s*\\{\\s*${escapeRegexLiteral(name)}\\s*\\}`).test(attributeText)) {
+        continue;
+      }
+
+      findings.push(finding({
+        ruleId: "frontend-secret",
+        severity: "critical",
+        filePath,
+        line: lineFromStringIndex(sourceCode, node.startIndex),
+        message: "Supabase service role client is passed into a React component prop.",
+        evidence: "Supabase service role client passed as JSX prop"
+      }));
+    }
+  });
+
+  return dedupeFindings(findings);
+}
+
 const USER_CONTROLLED_URL_PATTERNS = [
   /\b(?:req|request)\.query\b/i,
   /\b(?:req|request)\.body\b/i,
@@ -1131,7 +1248,8 @@ const USER_CONTROLLED_URL_PATTERNS = [
   /\bsearchParams\.get\s*\(/i,
   /\b(?:req|request)\.json\s*\(/i,
   /\bformData\s*\(/i,
-  /\bformData\.get\s*\(/i
+  /\bformData\.get\s*\(/i,
+  /\bformData\b/i
 ];
 
 const SAFE_URL_VALIDATOR_PATTERN =
@@ -1702,6 +1820,7 @@ function scanParsedSourceFile({ filePath, relativePath, sourceCode, tree, policy
       tree,
       requireClientComponent: credentialRequiresClient
     }),
+    ...scanServiceRoleClientPropFindings({ filePath, relativePath, sourceCode, tree }),
     ...scanBackendStrings({
       filePath,
       relativePath,
@@ -2011,10 +2130,25 @@ function extractRlsEnabledTables(source) {
   return enabledTables;
 }
 
+function findTautologicalRlsPredicates(source) {
+  const findings = [];
+  const literal = String.raw`(?:\d+(?:\.\d+)?|'(?:''|[^'])*'|"(?:[^"]|"")*"|true|false)`;
+  const pattern = new RegExp(String.raw`\b(?:using|with\s+check)\s*\(\s*(${literal})\s*=\s*\1\s*\)`, "gi");
+  let match;
+
+  while ((match = pattern.exec(source)) !== null) {
+    findings.push({
+      offset: match.index,
+      evidence: "tautological RLS predicate"
+    });
+  }
+
+  return findings;
+}
+
 function scanSqlSource({ filePath, source }) {
   const rlsEnabledTables = extractRlsEnabledTables(source);
-
-  return extractCreatedTables(source)
+  const missingRlsFindings = extractCreatedTables(source)
     .filter(({ tableName }) => !rlsEnabledTables.has(tableName))
     .map(({ line, tableName }) =>
       finding({
@@ -2026,6 +2160,18 @@ function scanSqlSource({ filePath, source }) {
         message: `Table ${tableName} is created without enabling Row Level Security.`
       })
     );
+  const tautologyFindings = findTautologicalRlsPredicates(source).map((item) =>
+    finding({
+      ruleId: "missing-rls",
+      severity: "critical",
+      filePath,
+      line: lineAtOffset(source, item.offset),
+      message: "Supabase RLS policy predicate is a tautology.",
+      evidence: item.evidence
+    })
+  );
+
+  return dedupeFindings([...missingRlsFindings, ...tautologyFindings]);
 }
 
 async function scanSupabaseMigrations(rootDir, options = {}) {
@@ -2039,6 +2185,7 @@ async function scanSupabaseMigrations(rootDir, options = {}) {
 
   const createdTables = [];
   const rlsEnabledTables = new Set();
+  const tautologyFindings = [];
 
   for (const relativePath of files) {
     if (isIgnoredPath(relativePath, policy)) {
@@ -2049,13 +2196,25 @@ async function scanSupabaseMigrations(rootDir, options = {}) {
     const source = await fs.readFile(filePath, "utf8");
     const tables = extractCreatedTables(source).map((table) => ({ ...table, filePath }));
     createdTables.push(...tables);
+    tautologyFindings.push(
+      ...findTautologicalRlsPredicates(source).map((item) =>
+        finding({
+          ruleId: "missing-rls",
+          severity: "critical",
+          filePath,
+          line: lineAtOffset(source, item.offset),
+          message: "Supabase RLS policy predicate is a tautology.",
+          evidence: item.evidence
+        })
+      )
+    );
 
     for (const tableName of extractRlsEnabledTables(source)) {
       rlsEnabledTables.add(tableName);
     }
   }
 
-  return applyPolicy(createdTables
+  const missingRlsFindings = createdTables
     .filter(({ tableName }) => !rlsEnabledTables.has(tableName))
     .map(({ filePath, line, tableName }) =>
       finding({
@@ -2066,7 +2225,9 @@ async function scanSupabaseMigrations(rootDir, options = {}) {
         tableName,
         message: `Table ${tableName} is created without enabling Row Level Security.`
       })
-    ), policy, rootDir);
+    );
+
+  return applyPolicy(dedupeFindings([...missingRlsFindings, ...tautologyFindings]), policy, rootDir);
 }
 
 async function fileExists(filePath) {
