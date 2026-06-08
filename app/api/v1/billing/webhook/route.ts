@@ -20,30 +20,19 @@ function isPrismaUniqueViolation(error: unknown) {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "P2002");
 }
 
-async function hasWebhookEventBeenProcessed(event: Stripe.Event) {
-  const existing = await prisma.stripeWebhookEvent.findUnique({
-    where: { stripeEventId: event.id },
-    select: { id: true }
+async function reserveWebhookEvent(event: Stripe.Event) {
+  await prisma.stripeWebhookEvent.create({
+    data: {
+      stripeEventId: event.id,
+      type: event.type
+    }
   });
-
-  return Boolean(existing);
 }
 
-async function markWebhookEventProcessed(event: Stripe.Event) {
-  try {
-    await prisma.stripeWebhookEvent.create({
-      data: {
-        stripeEventId: event.id,
-        type: event.type
-      }
-    });
-  } catch (error) {
-    if (isPrismaUniqueViolation(error)) {
-      return;
-    }
-
-    throw error;
-  }
+async function releaseWebhookEventReservation(event: Stripe.Event) {
+  await prisma.stripeWebhookEvent.delete({
+    where: { stripeEventId: event.id }
+  }).catch(() => {});
 }
 
 async function retrieveSubscription(stripe: Stripe, subscriptionId: string) {
@@ -192,12 +181,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid Stripe webhook signature." }, { status: 400 });
   }
 
-  if (await hasWebhookEventBeenProcessed(event)) {
-    return NextResponse.json({ received: true, duplicate: true });
-  }
+  try {
+    await reserveWebhookEvent(event);
+    await handleStripeEvent(event);
+  } catch (error) {
+    if (isPrismaUniqueViolation(error)) {
+      return NextResponse.json({ received: true, duplicate: true });
+    }
 
-  await handleStripeEvent(event);
-  await markWebhookEventProcessed(event);
+    await releaseWebhookEventReservation(event);
+    throw error;
+  }
 
   return NextResponse.json({ received: true });
 }

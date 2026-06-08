@@ -4,13 +4,14 @@ import {
   normalizeQuantity,
   priceIdForPlan,
   resolveBillingPlan,
-  resolveCheckoutOrganization,
   tierForPlan
 } from "../../../../../lib/billing";
 import { prisma } from "../../../../../lib/prisma";
 import { getStripe } from "../../../../../lib/stripe";
 
 export const runtime = "nodejs";
+
+const BILLING_ADMIN_ROLES = new Set(["owner", "admin", "billing_admin"]);
 
 const CheckoutRequestSchema = z.object({
   organizationId: z.string().trim().min(1).optional(),
@@ -26,6 +27,57 @@ function getUserEmail(req: NextRequest) {
     req.cookies.get("preflight_user_email")?.value ||
     null
   );
+}
+
+async function authorizeCheckoutOrganization({
+  userEmail,
+  requestedOrganizationId
+}: {
+  userEmail: string | null;
+  requestedOrganizationId: string | null;
+}) {
+  if (!userEmail) {
+    return {
+      status: 401,
+      error: "Authenticated user context is required for checkout.",
+      organization: null
+    };
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { email: userEmail },
+    include: { organization: true }
+  });
+
+  if (!user?.organization || !user.organizationId) {
+    return {
+      status: 401,
+      error: "User is not attached to an organization.",
+      organization: null
+    };
+  }
+
+  if (requestedOrganizationId && requestedOrganizationId !== user.organizationId) {
+    return {
+      status: 403,
+      error: "Forbidden: user cannot create checkout sessions for this organization.",
+      organization: null
+    };
+  }
+
+  if (!BILLING_ADMIN_ROLES.has(user.role.toLowerCase())) {
+    return {
+      status: 403,
+      error: "Forbidden: billing checkout requires organization admin access.",
+      organization: null
+    };
+  }
+
+  return {
+    status: 200,
+    error: null,
+    organization: user.organization
+  };
 }
 
 export async function POST(req: NextRequest) {
@@ -46,15 +98,18 @@ export async function POST(req: NextRequest) {
   }
 
   const userEmail = getUserEmail(req);
-  const organization = await resolveCheckoutOrganization({
-    organizationId: body.organizationId || req.headers.get("x-preflight-org-id") || req.cookies.get("preflight_org_id")?.value,
-    userEmail
+  const requestedOrganizationId =
+    body.organizationId || req.headers.get("x-preflight-org-id") || req.cookies.get("preflight_org_id")?.value || null;
+  const authorization = await authorizeCheckoutOrganization({
+    userEmail,
+    requestedOrganizationId
   });
 
-  if (!organization) {
-    return NextResponse.json({ error: "Organization context is required for checkout." }, { status: 401 });
+  if (!authorization.organization) {
+    return NextResponse.json({ error: authorization.error }, { status: authorization.status });
   }
 
+  const organization = authorization.organization;
   const stripe = getStripe();
   const priceId = priceIdForPlan(plan);
   const seats = normalizeQuantity(body.seats ?? fallbackSeats, plan);

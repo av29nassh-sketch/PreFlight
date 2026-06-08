@@ -90,7 +90,7 @@ model LicenseKey {
 
 model StripeWebhookEvent {
   id            String   @id @default(cuid())
-  stripeEventId String   @unique
+  stripeEventId String   @unique @map("stripe_event_id")
   type          String
   processedAt   DateTime @default(now())
 
