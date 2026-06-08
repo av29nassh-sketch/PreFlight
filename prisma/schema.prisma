@@ -53,6 +53,7 @@ model Organization {
   domains     String[]                 @default([])
   githubOrgs  String[]                 @default([])
   gitlabGroups String[]                @default([])
+  stripeCustomerId String?              @unique
   users       User[]
   licenseKeys LicenseKey[]
   telemetry   VulnerabilityTelemetry[]
@@ -68,6 +69,9 @@ model LicenseKey {
   usageCount     Int                      @default(0)
   seats          Int                      @default(1)
   label          String?
+  stripeCustomerId String?
+  stripeSubscriptionId String?
+  stripePriceId  String?
   userId         String?
   user           User?                    @relation(fields: [userId], references: [id], onDelete: SetNull)
   organizationId String?
@@ -81,6 +85,16 @@ model LicenseKey {
   @@index([organizationId])
   @@index([userId])
   @@index([status, tier])
+  @@index([stripeSubscriptionId])
+}
+
+model StripeWebhookEvent {
+  id            String   @id @default(cuid())
+  stripeEventId String   @unique
+  type          String
+  processedAt   DateTime @default(now())
+
+  @@index([type, processedAt])
 }
 
 model VulnerabilityTelemetry {
