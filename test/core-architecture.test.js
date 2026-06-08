@@ -408,6 +408,181 @@ describe("PreFlight core modular architecture", () => {
     });
   });
 
+  test("reasoning engine receives full diff and touched files when micro-router requires deep scan", async () => {
+    const {
+      REASONING_ENGINE_SYSTEM_PROMPT,
+      routeDeepRemediation
+    } = require("../src/router/cloud");
+    const requests = [];
+    const fakeClient = {
+      chat: {
+        completions: {
+          create: async (request, requestOptions) => {
+            requests.push({ request, requestOptions });
+            return {
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      patches: [
+                        {
+                          file_path: "app/api/tenant/route.ts",
+                          action: "update",
+                          new_content: "export const GET = withTenantGuard(handler);\n"
+                        }
+                      ],
+                      explanation: "Wrap the route handler and verify tenant isolation with two users."
+                    })
+                  }
+                }
+              ]
+            };
+          }
+        }
+      }
+    };
+
+    const result = await routeDeepRemediation({
+      diff: [
+        "diff --git a/app/api/tenant/route.ts b/app/api/tenant/route.ts",
+        "+++ b/app/api/tenant/route.ts",
+        "+export async function GET() { return Response.json({ ok: true }); }",
+        ""
+      ].join("\n"),
+      files: [
+        {
+          filePath: "app/api/tenant/route.ts",
+          content: "export async function GET() { return Response.json({ ok: true }); }\n"
+        }
+      ],
+      microRouter: {
+        evaluate: async () => ({ requires_deep_scan: true })
+      },
+      reasoningEngine: {
+        generatePatchSet: async (context) => {
+          expect(context.files[0].content).toContain("export async function GET");
+          return fakeClient.chat.completions.create({
+            model: "reasoning-test",
+            messages: [
+              { role: "system", content: REASONING_ENGINE_SYSTEM_PROMPT },
+              { role: "user", content: JSON.stringify(context) }
+            ],
+            response_format: { type: "json_object" },
+            temperature: 0
+          }, { timeout: 30000 }).then((response) =>
+            require("../remediationEngine").parseMultiFileRemediationJson(response.choices[0].message.content)
+          );
+        }
+      }
+    });
+
+    expect(result.routed).toBe("reasoning");
+    expect(result.patchSet).toEqual({
+      patches: [
+        {
+          filePath: "app/api/tenant/route.ts",
+          action: "update",
+          newContent: "export const GET = withTenantGuard(handler);\n"
+        }
+      ],
+      explanation: "Wrap the route handler and verify tenant isolation with two users."
+    });
+    expect(requests[0].request.messages[0]).toEqual({
+      role: "system",
+      content: REASONING_ENGINE_SYSTEM_PROMPT
+    });
+    expect(requests[0].requestOptions).toEqual({ timeout: 30000 });
+  });
+
+  test("ReasoningEngine uses the strict patch-set prompt and parses model JSON", async () => {
+    const {
+      REASONING_ENGINE_SYSTEM_PROMPT,
+      ReasoningEngine
+    } = require("../src/router/cloud");
+    const requests = [];
+    const engine = new ReasoningEngine({
+      client: {
+        chat: {
+          completions: {
+            create: async (request, requestOptions) => {
+              requests.push({ request, requestOptions });
+              return {
+                choices: [
+                  {
+                    message: {
+                      content: JSON.stringify({
+                        patches: [
+                          {
+                            file_path: "middleware.ts",
+                            action: "update",
+                            new_content: "export default withAuth(middleware);\n"
+                          }
+                        ],
+                        explanation: "Restore auth middleware and verify protected routes return 403."
+                      })
+                    }
+                  }
+                ]
+              };
+            }
+          }
+        }
+      },
+      env: {},
+      model: "reasoning-test",
+      timeoutMs: 12345
+    });
+
+    const patchSet = await engine.generatePatchSet({
+      diff: "+return NextResponse.next();\n",
+      files: [{ filePath: "middleware.ts", content: "export function middleware() { return NextResponse.next(); }\n" }]
+    });
+
+    expect(patchSet).toEqual({
+      patches: [
+        {
+          filePath: "middleware.ts",
+          action: "update",
+          newContent: "export default withAuth(middleware);\n"
+        }
+      ],
+      explanation: "Restore auth middleware and verify protected routes return 403."
+    });
+    expect(requests[0].request.messages[0]).toEqual({
+      role: "system",
+      content: REASONING_ENGINE_SYSTEM_PROMPT
+    });
+    expect(requests[0].request.messages[1].content).toContain("unified_diff");
+    expect(requests[0].request.messages[1].content).toContain("middleware.ts");
+    expect(requests[0].request.response_format).toEqual({ type: "json_object" });
+    expect(requests[0].requestOptions).toEqual({ timeout: 12345 });
+  });
+
+  test("deep remediation routing stops after micro-router says no deep scan is needed", async () => {
+    const { routeDeepRemediation } = require("../src/router/cloud");
+    let reasoningCalled = false;
+
+    const result = await routeDeepRemediation({
+      diff: "+const label = 'copy';",
+      files: [],
+      microRouter: {
+        evaluate: async () => ({ requires_deep_scan: false })
+      },
+      reasoningEngine: {
+        generatePatchSet: async () => {
+          reasoningCalled = true;
+        }
+      }
+    });
+
+    expect(reasoningCalled).toBe(false);
+    expect(result).toEqual({
+      routed: "micro",
+      requires_deep_scan: false,
+      patchSet: null
+    });
+  });
+
   test("scan-diff CLI reads stdin and exits non-zero for fuzzy context", () => {
     const root = makeProject({});
     const result = runNode([

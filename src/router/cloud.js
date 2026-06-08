@@ -1,6 +1,7 @@
 const crypto = require("node:crypto");
 const os = require("node:os");
 const OpenAIImport = require("openai");
+const { parseMultiFileRemediationJson } = require("../../remediationEngine");
 const { evaluateHardware } = require("./hardware");
 
 const DEFAULT_CLOUD_ENDPOINT = "https://api.preflight.dev/v1/scan";
@@ -11,6 +12,8 @@ const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEFAULT_OPENROUTER_MICRO_MODEL = "qwen/qwen3-coder:free";
 const DEFAULT_MICRO_ROUTER_TIMEOUT_MS = 5000;
 const DEFAULT_MICRO_ROUTER_DIFF_BYTES = 12000;
+const DEFAULT_REASONING_TIMEOUT_MS = 30000;
+const DEFAULT_REASONING_CONTEXT_BYTES = 60000;
 const OpenAI = OpenAIImport.default || OpenAIImport;
 
 const PREFLIGHT_SYSTEM_PROMPT = `
@@ -38,6 +41,17 @@ const MICRO_ROUTER_SYSTEM_PROMPT = [
   "Return strict JSON only: {\"requires_deep_scan\":true} or {\"requires_deep_scan\":false}.",
   "Return true ONLY for structural, architectural, authorization, authentication, tenant isolation, RLS, middleware, webhook, billing, database policy, RPC, or security boundary changes.",
   "Return false for cosmetic edits, copy changes, simple type fixes, formatting, comments, tests without production security impact, and ordinary local variable changes."
+].join("\n");
+
+const REASONING_ENGINE_SYSTEM_PROMPT = [
+  "You are PreFlight's high-tier Reasoning Engine for deep multi-file remediation.",
+  "Analyze the unified diff and touched file contents for architectural drift, auth regressions, tenant isolation bugs, RLS bypasses, middleware bypasses, webhook idempotency regressions, and unsafe cross-file wrapper changes.",
+  "Return strict valid JSON only. No markdown, no backticks, no prose outside JSON.",
+  "The JSON shape must be exactly:",
+  "{\"patches\":[{\"file_path\":\"...\",\"action\":\"update|create|delete\",\"new_content\":\"...\"}],\"explanation\":\"Plain-English QA explanation\"}",
+  "Use action update to replace an existing file with new_content, create to create a new file with new_content, and delete to remove a file. For delete, new_content must be an empty string.",
+  "Keep file_path relative to the repository root. Never use absolute paths or parent-directory traversal.",
+  "The explanation must tell the developer what changed and what manual QA should verify after applying the architectural patch."
 ].join("\n");
 
 function assertDiff(diff) {
@@ -77,6 +91,59 @@ function compactDiffForMicroRouter(diff, options = {}) {
   }
 
   return Buffer.from(bytes.subarray(0, maxBytes)).toString("utf8");
+}
+
+function truncateUtf8(value, maxBytes) {
+  const text = String(value || "");
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= maxBytes) {
+    return text;
+  }
+
+  return `${Buffer.from(bytes.subarray(0, maxBytes)).toString("utf8")}\n[PreFlight truncated context]`;
+}
+
+function normalizeTouchedFiles(files = [], options = {}) {
+  const maxBytes = Number.isFinite(options.maxBytes) && options.maxBytes > 0
+    ? options.maxBytes
+    : DEFAULT_REASONING_CONTEXT_BYTES;
+  const normalized = [];
+  let remainingBytes = maxBytes;
+
+  for (const file of Array.isArray(files) ? files : []) {
+    const filePath = file.filePath || file.path || file.relativePath || file.file_path;
+    if (typeof filePath !== "string" || !filePath.trim()) {
+      continue;
+    }
+
+    const content = typeof file.content === "string"
+      ? file.content
+      : typeof file.sourceCode === "string"
+        ? file.sourceCode
+        : "";
+    const sliceBytes = Math.max(0, Math.min(remainingBytes, Buffer.byteLength(content, "utf8")));
+    normalized.push({
+      file_path: filePath.trim().replace(/\\/g, "/"),
+      content: truncateUtf8(content, sliceBytes)
+    });
+    remainingBytes -= sliceBytes;
+
+    if (remainingBytes <= 0) {
+      break;
+    }
+  }
+
+  return normalized;
+}
+
+function buildReasoningContextPrompt({ diff, files = [] }, options = {}) {
+  assertDiff(diff);
+  const maxContextBytes = options.maxContextBytes || DEFAULT_REASONING_CONTEXT_BYTES;
+
+  return JSON.stringify({
+    unified_diff: truncateUtf8(diff, maxContextBytes),
+    touched_files: normalizeTouchedFiles(files, { maxBytes: maxContextBytes })
+  });
 }
 
 function normalizeAction(mode = "manual-qa") {
@@ -275,6 +342,51 @@ function createMicroRouterClient(provider, options = {}) {
   });
 }
 
+function resolveReasoningEngineProvider(env = process.env, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || env.PREFLIGHT_REASONING_TIMEOUT_MS);
+  const resolvedTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_REASONING_TIMEOUT_MS;
+
+  if (options.apiKey || env.PREFLIGHT_REASONING_API_KEY || env.PREFLIGHT_CLOUD_API_KEY || env.OPENAI_API_KEY) {
+    return {
+      apiKey: options.apiKey || env.PREFLIGHT_REASONING_API_KEY || env.PREFLIGHT_CLOUD_API_KEY || env.OPENAI_API_KEY,
+      baseURL: options.baseURL || env.PREFLIGHT_REASONING_BASE_URL || env.PREFLIGHT_CLOUD_BASE_URL || undefined,
+      model: options.model || env.PREFLIGHT_REASONING_MODEL || env.PREFLIGHT_CLOUD_MODEL || DEFAULT_CLOUD_MODEL,
+      provider: "reasoning-cloud",
+      timeoutMs: resolvedTimeout
+    };
+  }
+
+  if (env.OPENROUTER_API_KEY) {
+    return {
+      apiKey: env.OPENROUTER_API_KEY,
+      baseURL: options.baseURL || env.OPENROUTER_BASE_URL || DEFAULT_OPENROUTER_BASE_URL,
+      model: options.model || env.PREFLIGHT_REASONING_MODEL || DEFAULT_OPENROUTER_MICRO_MODEL,
+      provider: "openrouter",
+      timeoutMs: resolvedTimeout
+    };
+  }
+
+  return {
+    apiKey: options.apiKey || env.PREFLIGHT_LOCAL_LLM_API_KEY || "ollama",
+    baseURL: options.baseURL || env.PREFLIGHT_LOCAL_LLM_URL || DEFAULT_LOCAL_LLM_BASE_URL,
+    model: options.model || env.PREFLIGHT_REASONING_MODEL || DEFAULT_LOCAL_MICRO_MODEL,
+    provider: "ollama",
+    timeoutMs: resolvedTimeout
+  };
+}
+
+function createReasoningEngineClient(provider, options = {}) {
+  if (options.client) {
+    return options.client;
+  }
+
+  return new OpenAI({
+    apiKey: provider.apiKey,
+    maxRetries: 0,
+    ...(provider.baseURL ? { baseURL: provider.baseURL } : {})
+  });
+}
+
 class MicroRouter {
   constructor(options = {}) {
     this.env = options.env || process.env;
@@ -328,6 +440,66 @@ class MicroRouter {
       };
     }
   }
+}
+
+class ReasoningEngine {
+  constructor(options = {}) {
+    this.env = options.env || process.env;
+    this.provider = resolveReasoningEngineProvider(this.env, options);
+    this.client = createReasoningEngineClient(this.provider, options);
+    this.maxContextBytes = options.maxContextBytes || DEFAULT_REASONING_CONTEXT_BYTES;
+  }
+
+  async generatePatchSet(context, options = {}) {
+    const prompt = buildReasoningContextPrompt(context, {
+      maxContextBytes: options.maxContextBytes || this.maxContextBytes
+    });
+    const response = await this.client.chat.completions.create(
+      {
+        model: options.model || this.provider.model,
+        messages: [
+          {
+            role: "system",
+            content: REASONING_ENGINE_SYSTEM_PROMPT
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0
+      },
+      { timeout: options.timeoutMs || this.provider.timeoutMs }
+    );
+
+    return parseMultiFileRemediationJson(extractCloudMessageText(response));
+  }
+}
+
+async function routeDeepRemediation(options = {}) {
+  const diff = options.diff;
+  const files = options.files || [];
+  assertDiff(diff);
+
+  const microRouter = options.microRouter || new MicroRouter(options.microRouterOptions || options);
+  const microDecision = await microRouter.evaluate(diff);
+  if (!microDecision.requires_deep_scan) {
+    return {
+      routed: "micro",
+      requires_deep_scan: false,
+      patchSet: null
+    };
+  }
+
+  const reasoningEngine = options.reasoningEngine || new ReasoningEngine(options.reasoningOptions || options);
+  const patchSet = await reasoningEngine.generatePatchSet({ diff, files });
+  return {
+    routed: "reasoning",
+    requires_deep_scan: true,
+    microDecision,
+    patchSet
+  };
 }
 
 async function callCloudDiffAnalyzer(diff, options = {}) {
@@ -405,10 +577,12 @@ module.exports = {
   analyzeDiffWithCloud,
   buildCloudPayload,
   buildDiffAnalysisPrompt,
+  buildReasoningContextPrompt,
   callCloudDiffAnalyzer,
   compactDiffForMicroRouter,
   createCloudClient,
   createMicroRouterClient,
+  createReasoningEngineClient,
   DEFAULT_CLOUD_ENDPOINT,
   DEFAULT_CLOUD_MODEL,
   DEFAULT_LOCAL_LLM_BASE_URL,
@@ -417,11 +591,17 @@ module.exports = {
   DEFAULT_MICRO_ROUTER_TIMEOUT_MS,
   DEFAULT_OPENROUTER_BASE_URL,
   DEFAULT_OPENROUTER_MICRO_MODEL,
+  DEFAULT_REASONING_CONTEXT_BYTES,
+  DEFAULT_REASONING_TIMEOUT_MS,
   MicroRouter,
   MICRO_ROUTER_SYSTEM_PROMPT,
   prepareCloudFallback,
   PREFLIGHT_SYSTEM_PROMPT,
+  ReasoningEngine,
+  REASONING_ENGINE_SYSTEM_PROMPT,
+  resolveReasoningEngineProvider,
   resolveMicroRouterProvider,
   resolveMicroRouterTimeoutMs,
+  routeDeepRemediation,
   requestCloudScan
 };

@@ -193,4 +193,117 @@ describe("remediationEngine", () => {
       provider: "openai"
     });
   });
+
+  test("parseMultiFileRemediationJson validates the strict deep remediation structure", () => {
+    const { parseMultiFileRemediationJson } = require("../remediationEngine");
+
+    expect(parseMultiFileRemediationJson(JSON.stringify({
+      patches: [
+        {
+          file_path: "app/api/tenant/route.ts",
+          action: "update",
+          new_content: "export const GET = withTenantGuard(handler);\n"
+        }
+      ],
+      explanation: "Verify tenant isolation manually after applying the wrapper."
+    }))).toEqual({
+      patches: [
+        {
+          filePath: "app/api/tenant/route.ts",
+          action: "update",
+          newContent: "export const GET = withTenantGuard(handler);\n"
+        }
+      ],
+      explanation: "Verify tenant isolation manually after applying the wrapper."
+    });
+
+    expect(() => parseMultiFileRemediationJson(JSON.stringify({
+      patches: [{ file_path: "../escape.js", action: "update", new_content: "bad" }],
+      explanation: "bad path"
+    }))).toThrow("Patch file_path must stay inside the workspace");
+  });
+
+  test("applyMultiFilePatchSet prompts once and applies update create delete actions", async () => {
+    const fs = require("node:fs");
+    const os = require("node:os");
+    const path = require("node:path");
+    const { applyMultiFilePatchSet } = require("../remediationEngine");
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-deep-remediate-"));
+    const prompts = [];
+    const output = { text: "", write(chunk) { this.text += String(chunk); } };
+
+    try {
+      fs.mkdirSync(path.join(rootDir, "app/api/tenant"), { recursive: true });
+      fs.writeFileSync(path.join(rootDir, "app/api/tenant/route.ts"), "export async function GET() {}\n");
+      fs.writeFileSync(path.join(rootDir, "app/api/tenant/old.ts"), "remove me\n");
+
+      const result = await applyMultiFilePatchSet({
+        patches: [
+          {
+            filePath: "app/api/tenant/route.ts",
+            action: "update",
+            newContent: "export const GET = withTenantGuard(handler);\n"
+          },
+          {
+            filePath: "app/api/tenant/policy.ts",
+            action: "create",
+            newContent: "export const policy = 'tenant';\n"
+          },
+          {
+            filePath: "app/api/tenant/old.ts",
+            action: "delete",
+            newContent: ""
+          }
+        ],
+        explanation: "Wrap tenant routes and remove stale bypass file."
+      }, {
+        ask: async (question) => {
+          prompts.push(question);
+          return "y";
+        },
+        output,
+        rootDir
+      });
+
+      expect(prompts).toEqual(["[y/n] Apply entire multi-file architectural patch? "]);
+      expect(result).toEqual({ attempted: 3, applied: 3, skipped: 0 });
+      expect(fs.readFileSync(path.join(rootDir, "app/api/tenant/route.ts"), "utf8")).toBe("export const GET = withTenantGuard(handler);\n");
+      expect(fs.readFileSync(path.join(rootDir, "app/api/tenant/policy.ts"), "utf8")).toBe("export const policy = 'tenant';\n");
+      expect(fs.existsSync(path.join(rootDir, "app/api/tenant/old.ts"))).toBe(false);
+      expect(output.text).toContain("Wrap tenant routes and remove stale bypass file.");
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test("applyMultiFilePatchSet leaves files untouched when declined", async () => {
+    const fs = require("node:fs");
+    const os = require("node:os");
+    const path = require("node:path");
+    const { applyMultiFilePatchSet } = require("../remediationEngine");
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-deep-decline-"));
+
+    try {
+      fs.writeFileSync(path.join(rootDir, "route.ts"), "before\n");
+      const result = await applyMultiFilePatchSet({
+        patches: [
+          {
+            filePath: "route.ts",
+            action: "update",
+            newContent: "after\n"
+          }
+        ],
+        explanation: "Decline this."
+      }, {
+        ask: async () => "n",
+        output: { write() {} },
+        rootDir
+      });
+
+      expect(result).toEqual({ attempted: 1, applied: 0, skipped: 1 });
+      expect(fs.readFileSync(path.join(rootDir, "route.ts"), "utf8")).toBe("before\n");
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
 });
