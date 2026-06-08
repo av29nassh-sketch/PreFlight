@@ -129,6 +129,40 @@ describe("PreFlight Check", () => {
     );
   });
 
+  test("flags static secrets folded through array joins and template literals", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/dashboard/page.tsx": [
+        "\"use client\";",
+        "",
+        "export default function Dashboard() {",
+        "  const joinedKey = [\"sk\", \"_live_\", \"1234567890abcdef\"].join(\"\");",
+        "  const templateKey = `sk${\"_live_\"}${\"abcdef1234567890\"}`;",
+        "  return <main>{joinedKey}{templateKey}</main>;",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "frontend-secret",
+          filePath: path.join(root, "app/dashboard/page.tsx"),
+          line: 4,
+          evidence: "Stripe Secret Key"
+        }),
+        expect.objectContaining({
+          ruleId: "frontend-secret",
+          filePath: path.join(root, "app/dashboard/page.tsx"),
+          line: 5,
+          evidence: "Stripe Secret Key"
+        })
+      ])
+    );
+  });
+
   test("flags Supabase service role environment references in pages components", async () => {
     const { scanProject } = require("../index");
     const root = makeProject({
@@ -331,6 +365,39 @@ describe("PreFlight Check", () => {
           filePath: path.join(root, "supabase/migrations/20260602000002_create_profiles.sql"),
           line: 5,
           evidence: "tautological RLS predicate"
+        })
+      ])
+    );
+  });
+
+  test("flags statically true mathematical Supabase RLS policy predicates", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "supabase/migrations/20260602000003_create_profiles.sql": [
+        "create table public.profiles (",
+        "  id uuid primary key",
+        ");",
+        "alter table public.profiles enable row level security;",
+        "create policy \"math select\" on public.profiles for select using (2 > 1);",
+        "create policy \"math insert\" on public.profiles for insert with check (100 >= 10);"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "missing-rls",
+          filePath: path.join(root, "supabase/migrations/20260602000003_create_profiles.sql"),
+          line: 5,
+          evidence: "statically true RLS predicate"
+        }),
+        expect.objectContaining({
+          ruleId: "missing-rls",
+          filePath: path.join(root, "supabase/migrations/20260602000003_create_profiles.sql"),
+          line: 6,
+          evidence: "statically true RLS predicate"
         })
       ])
     );
@@ -1014,7 +1081,7 @@ describe("PreFlight Check", () => {
     expect(result.stdout).not.toContain("[y/n] Accept and Auto-Heal?");
   });
 
-  test("detects all deterministic credential patterns only in string literals", async () => {
+  test("detects deterministic credential patterns in string and static template literals", async () => {
     const { scanProject } = require("../index");
     const root = makeProject({
       "credentials.js": [
@@ -1026,12 +1093,25 @@ describe("PreFlight Check", () => {
 
     const findings = await scanProject(root);
     const fixableFindings = findings.filter((finding) => finding.fix);
+    const expectedReplacements = [
+      ...credentialSamples.map(([, , replacement]) => replacement),
+      "process.env.OPENAI_API_KEY"
+    ].sort();
 
-    expect(fixableFindings).toHaveLength(10);
+    expect(fixableFindings).toHaveLength(11);
     expect(fixableFindings.map((finding) => finding.fix.replacement).sort()).toEqual(
-      credentialSamples.map(([, , replacement]) => replacement).sort()
+      expectedReplacements
     );
-    expect(fixableFindings.some((finding) => finding.evidence.includes("template"))).toBe(false);
+    expect(fixableFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          evidence: "OpenAI API Key",
+          fix: expect.objectContaining({
+            replacement: "process.env.OPENAI_API_KEY"
+          })
+        })
+      ])
+    );
   });
 
   test("scans TypeScript and TSX files outside app routes even when a Next app folder exists", async () => {
@@ -1628,6 +1708,35 @@ describe("PreFlight Check", () => {
           filePath: path.join(root, "app/actions/proxy.ts"),
           line: 6,
           evidence: "fetch(params.url)"
+        })
+      ])
+    );
+  });
+
+  test("backend SSRF scan preserves taint through JSON serialization round trips", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "export async function preview(formData) {",
+        "  \"use server\";",
+        "  const mapped = Object.fromEntries(formData);",
+        "  const serialized = JSON.stringify(mapped);",
+        "  const parsed = JSON.parse(serialized);",
+        "  return fetch(parsed.url);",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ssrf",
+          filePath: path.join(root, "app/actions/proxy.ts"),
+          line: 6,
+          evidence: "fetch(parsed.url)"
         })
       ])
     );

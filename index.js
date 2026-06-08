@@ -1005,6 +1005,189 @@ function getCredentialFix(sourceCode, node, credential) {
   };
 }
 
+function readQuotedStaticString(value, startIndex = 0) {
+  const source = String(value || "");
+  const quote = source[startIndex];
+  if (!["'", "\"", "`"].includes(quote)) {
+    return null;
+  }
+
+  let cursor = startIndex + 1;
+  let output = "";
+  while (cursor < source.length) {
+    const char = source[cursor];
+    if (char === "\\") {
+      if (cursor + 1 >= source.length) {
+        return null;
+      }
+      output += source[cursor + 1];
+      cursor += 2;
+      continue;
+    }
+
+    if (char === quote) {
+      return {
+        value: output,
+        endIndex: cursor + 1
+      };
+    }
+
+    if (quote === "`" && char === "$" && source[cursor + 1] === "{") {
+      return null;
+    }
+
+    output += char;
+    cursor += 1;
+  }
+
+  return null;
+}
+
+function staticStringFromInlineExpressionText(expressionText) {
+  const text = String(expressionText || "").trim();
+  if (text === "") {
+    return "";
+  }
+
+  if (/^['"`]/.test(text)) {
+    const quoted = readQuotedStaticString(text, 0);
+    return quoted && quoted.endIndex === text.length ? quoted.value : null;
+  }
+
+  const binaryParts = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    while (/\s/.test(text[cursor] || "")) {
+      cursor += 1;
+    }
+    const part = readQuotedStaticString(text, cursor);
+    if (!part) {
+      return null;
+    }
+    binaryParts.push(part.value);
+    cursor = part.endIndex;
+    while (/\s/.test(text[cursor] || "")) {
+      cursor += 1;
+    }
+    if (cursor >= text.length) {
+      break;
+    }
+    if (text[cursor] !== "+") {
+      return null;
+    }
+    cursor += 1;
+  }
+
+  return binaryParts.length > 0 ? binaryParts.join("") : null;
+}
+
+function staticStringArrayFromText(arrayText) {
+  const text = String(arrayText || "").trim();
+  if (!text.startsWith("[") || !text.endsWith("]")) {
+    return null;
+  }
+
+  const values = [];
+  let cursor = 1;
+  while (cursor < text.length - 1) {
+    while (/[\s,]/.test(text[cursor] || "")) {
+      cursor += 1;
+    }
+    if (cursor >= text.length - 1) {
+      break;
+    }
+
+    const quoted = readQuotedStaticString(text, cursor);
+    if (!quoted) {
+      return null;
+    }
+    values.push(quoted.value);
+    cursor = quoted.endIndex;
+    while (/\s/.test(text[cursor] || "")) {
+      cursor += 1;
+    }
+    if (text[cursor] === ",") {
+      cursor += 1;
+      continue;
+    }
+    if (cursor < text.length - 1) {
+      return null;
+    }
+  }
+
+  return values;
+}
+
+function staticStringFromArrayJoinText(callText) {
+  const text = String(callText || "").trim();
+  const joinMatch = /^(\[[\s\S]*\])\s*\.\s*join\s*\(\s*([\s\S]*?)\s*\)$/.exec(text);
+  if (!joinMatch) {
+    return null;
+  }
+
+  const values = staticStringArrayFromText(joinMatch[1]);
+  if (!values) {
+    return null;
+  }
+
+  const separatorText = joinMatch[2].trim();
+  const separator = separatorText === ""
+    ? ","
+    : staticStringFromInlineExpressionText(separatorText);
+  return separator === null ? null : values.join(separator);
+}
+
+function staticStringFromTemplateText(templateText) {
+  const text = String(templateText || "").trim();
+  if (!text.startsWith("`") || !text.endsWith("`")) {
+    return null;
+  }
+
+  let cursor = 1;
+  let output = "";
+  while (cursor < text.length - 1) {
+    const char = text[cursor];
+    if (char === "\\") {
+      if (cursor + 1 >= text.length - 1) {
+        return null;
+      }
+      output += text[cursor + 1];
+      cursor += 2;
+      continue;
+    }
+
+    if (char === "$" && text[cursor + 1] === "{") {
+      let depth = 1;
+      let expressionCursor = cursor + 2;
+      while (expressionCursor < text.length - 1 && depth > 0) {
+        if (text[expressionCursor] === "{") {
+          depth += 1;
+        } else if (text[expressionCursor] === "}") {
+          depth -= 1;
+        }
+        expressionCursor += 1;
+      }
+      if (depth !== 0) {
+        return null;
+      }
+
+      const expressionText = text.slice(cursor + 2, expressionCursor - 1);
+      const expressionValue = staticStringFromInlineExpressionText(expressionText);
+      if (expressionValue === null) {
+        return null;
+      }
+      output += expressionValue;
+      cursor = expressionCursor;
+      continue;
+    }
+
+    output += char;
+    cursor += 1;
+  }
+
+  return output;
+}
+
 function staticStringFromNode(sourceCode, node) {
   if (!node) {
     return null;
@@ -1016,6 +1199,14 @@ function staticStringFromNode(sourceCode, node) {
 
   if (node.type === "parenthesized_expression" && node.namedChildCount === 1) {
     return staticStringFromNode(sourceCode, node.namedChild(0));
+  }
+
+  if (node.type === "template_string") {
+    return staticStringFromTemplateText(textFromNode(sourceCode, node));
+  }
+
+  if (node.type === "call_expression") {
+    return staticStringFromArrayJoinText(textFromNode(sourceCode, node));
   }
 
   if (node.type !== "binary_expression") {
@@ -1085,7 +1276,7 @@ function scanCredentialStrings({ filePath, relativePath, sourceCode, tree, requi
       return;
     }
 
-    if (node.type === "binary_expression") {
+    if (["binary_expression", "call_expression", "template_string"].includes(node.type)) {
       const staticValue = staticStringFromNode(sourceCode, node);
       const staticFinding = credentialFindingForStaticValue({
         filePath,
@@ -1266,6 +1457,15 @@ function isUserControlledUrlExpression(expressionText, taintedVariables = new Se
   );
 }
 
+function isJsonSerializationTaintExpression(expressionText, taintedVariables = new Set()) {
+  const text = String(expressionText || "");
+  if (!/\bJSON\.(?:parse|stringify)\s*\(/.test(text)) {
+    return false;
+  }
+
+  return isUserControlledUrlExpression(text, taintedVariables);
+}
+
 function isSafeUrlValidatorName(value) {
   return SAFE_URL_VALIDATOR_PATTERN.test(String(value || ""));
 }
@@ -1384,7 +1584,9 @@ function collectSsrfDataflow(tree, sourceCode, trustedValidators) {
         const valueText = textFromNode(sourceCode, valueNode);
         const names = collectPatternIdentifiers(nameNode, sourceCode);
         const isValidated = isTrustedSafeUrlValidatorCallText(valueText, trustedValidators);
-        const isTainted = isUserControlledUrlExpression(valueText, taintedVariables);
+        const isTainted =
+          isJsonSerializationTaintExpression(valueText, taintedVariables) ||
+          isUserControlledUrlExpression(valueText, taintedVariables);
 
         if (isValidated && isTainted) {
           for (const name of names) {
@@ -1414,7 +1616,10 @@ function collectSsrfDataflow(tree, sourceCode, trustedValidators) {
         }
 
         const rightText = textFromNode(sourceCode, rightNode);
-        if (isUserControlledUrlExpression(rightText, taintedVariables)) {
+        if (
+          isJsonSerializationTaintExpression(rightText, taintedVariables) ||
+          isUserControlledUrlExpression(rightText, taintedVariables)
+        ) {
           for (const name of collectPatternIdentifiers(leftNode, sourceCode)) {
             if (!taintedVariables.has(name)) {
               taintedVariables.add(name);
@@ -2130,16 +2335,92 @@ function extractRlsEnabledTables(source) {
   return enabledTables;
 }
 
+function parseStaticSqlLiteral(value) {
+  const text = String(value || "").trim();
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    return { type: "number", value: Number(text), raw: text };
+  }
+
+  if (/^(?:true|false)$/i.test(text)) {
+    return { type: "boolean", value: /^true$/i.test(text), raw: text.toLowerCase() };
+  }
+
+  if (/^'(?:''|[^'])*'$/.test(text)) {
+    return { type: "string", value: text.slice(1, -1).replace(/''/g, "'"), raw: text };
+  }
+
+  if (/^"(?:[^"]|"")*"$/.test(text)) {
+    return { type: "string", value: text.slice(1, -1).replace(/""/g, "\""), raw: text };
+  }
+
+  return null;
+}
+
+function evaluateStaticSqlComparison(predicateText) {
+  const text = String(predicateText || "").trim();
+  const comparison = /^(.+?)\s*(=|<>|!=|>=|<=|>|<)\s*(.+?)$/.exec(text);
+  if (!comparison) {
+    return null;
+  }
+
+  const left = parseStaticSqlLiteral(comparison[1]);
+  const right = parseStaticSqlLiteral(comparison[3]);
+  if (!left || !right || left.type !== right.type) {
+    return null;
+  }
+
+  const operator = comparison[2];
+  let result;
+  switch (operator) {
+    case "=":
+      result = left.value === right.value;
+      break;
+    case "<>":
+    case "!=":
+      result = left.value !== right.value;
+      break;
+    case ">":
+      result = left.value > right.value;
+      break;
+    case ">=":
+      result = left.value >= right.value;
+      break;
+    case "<":
+      result = left.value < right.value;
+      break;
+    case "<=":
+      result = left.value <= right.value;
+      break;
+    default:
+      return null;
+  }
+
+  if (result !== true) {
+    return null;
+  }
+
+  return {
+    result,
+    evidence: operator === "=" && left.raw === right.raw
+      ? "tautological RLS predicate"
+      : "statically true RLS predicate"
+  };
+}
+
 function findTautologicalRlsPredicates(source) {
   const findings = [];
-  const literal = String.raw`(?:\d+(?:\.\d+)?|'(?:''|[^'])*'|"(?:[^"]|"")*"|true|false)`;
-  const pattern = new RegExp(String.raw`\b(?:using|with\s+check)\s*\(\s*(${literal})\s*=\s*\1\s*\)`, "gi");
+  const pattern = /\b(?:using|with\s+check)\s*\(\s*([^()]+?)\s*\)/gi;
   let match;
 
   while ((match = pattern.exec(source)) !== null) {
+    const evaluation = evaluateStaticSqlComparison(match[1]);
+    if (!evaluation) {
+      continue;
+    }
+
     findings.push({
       offset: match.index,
-      evidence: "tautological RLS predicate"
+      evidence: evaluation.evidence
     });
   }
 

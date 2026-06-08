@@ -162,6 +162,26 @@ describe("PreFlight core modular architecture", () => {
     expect(stringTautology.findings[0].kind).toBe("supabase-rls");
   });
 
+  test("scanner catches statically true mathematical RLS predicates in diffs", () => {
+    const { scanDiff, STATES } = require("../src/ast/scanner");
+
+    const result = scanDiff([
+      "diff --git a/supabase/migrations/004_policy.sql b/supabase/migrations/004_policy.sql",
+      "+++ b/supabase/migrations/004_policy.sql",
+      "+create policy \"open select\" on profiles for select using (2 > 1);",
+      "+create policy \"open insert\" on profiles for insert with check (100 >= 10);"
+    ].join("\n"));
+
+    expect(result.state).toBe(STATES.CONFIRMED_FINDING);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "supabase-rls"
+        })
+      ])
+    );
+  });
+
   test("interactive Auto-Heal prompt prints a colorized diff and requires explicit y", async () => {
     const { promptForAutoHeal } = require("../src/ast/scanner");
     const output = { text: "", write(chunk) { this.text += chunk; } };

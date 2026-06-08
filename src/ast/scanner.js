@@ -189,10 +189,69 @@ function findRawSqlFindings(addedLines) {
   return findings;
 }
 
+function parseStaticSqlLiteral(value) {
+  const text = String(value || "").trim();
+  if (/^\d+(?:\.\d+)?$/.test(text)) {
+    return { type: "number", value: Number(text), raw: text };
+  }
+
+  if (/^(?:true|false)$/i.test(text)) {
+    return { type: "boolean", value: /^true$/i.test(text), raw: text.toLowerCase() };
+  }
+
+  if (/^'(?:''|[^'])*'$/.test(text)) {
+    return { type: "string", value: text.slice(1, -1).replace(/''/g, "'"), raw: text };
+  }
+
+  if (/^"(?:[^"]|"")*"$/.test(text)) {
+    return { type: "string", value: text.slice(1, -1).replace(/""/g, "\""), raw: text };
+  }
+
+  return null;
+}
+
+function evaluatesToStaticSqlTrue(predicateText) {
+  const comparison = /^(.+?)\s*(=|<>|!=|>=|<=|>|<)\s*(.+?)$/.exec(String(predicateText || "").trim());
+  if (!comparison) {
+    return false;
+  }
+
+  const left = parseStaticSqlLiteral(comparison[1]);
+  const right = parseStaticSqlLiteral(comparison[3]);
+  if (!left || !right || left.type !== right.type) {
+    return false;
+  }
+
+  switch (comparison[2]) {
+    case "=":
+      return left.value === right.value;
+    case "<>":
+    case "!=":
+      return left.value !== right.value;
+    case ">":
+      return left.value > right.value;
+    case ">=":
+      return left.value >= right.value;
+    case "<":
+      return left.value < right.value;
+    case "<=":
+      return left.value <= right.value;
+    default:
+      return false;
+  }
+}
+
 function hasTautologicalRlsPredicate(text) {
-  const literal = String.raw`(?:\d+(?:\.\d+)?|'(?:''|[^'])*'|"(?:[^"]|"")*"|true|false)`;
-  const pattern = new RegExp(String.raw`\b(?:using|with\s+check)\s*\(\s*(${literal})\s*=\s*\1\s*\)`, "i");
-  return pattern.test(String(text || ""));
+  const pattern = /\b(?:using|with\s+check)\s*\(\s*([^()]+?)\s*\)/gi;
+  let match;
+
+  while ((match = pattern.exec(String(text || ""))) !== null) {
+    if (evaluatesToStaticSqlTrue(match[1])) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function findSupabaseRlsFindings(addedLines) {
