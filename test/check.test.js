@@ -1022,6 +1022,45 @@ describe("PreFlight Check", () => {
     expect(fs.readFileSync(filePath, "utf8")).toBe(source);
   });
 
+  test("applyScanFixes skips SQL remediation when provider fallback returns the original snippet", async () => {
+    const { applyScanFixes } = require("../index");
+    const source = "const query = \"SELECT * FROM users WHERE id = \" + userId;\n";
+    const root = makeProject({
+      "lib/db.js": source
+    });
+    const filePath = path.join(root, "lib/db.js");
+    const sqlSnippet = "\"SELECT * FROM users WHERE id = \" + userId";
+    const startByte = Buffer.byteLength(source.slice(0, source.indexOf(sqlSnippet)), "utf8");
+    const prompts = [];
+
+    const result = await applyScanFixes(
+      [
+        {
+          ruleId: "sql-injection",
+          filePath,
+          fix: {
+            kind: "sql-remediation",
+            startByte,
+            endByte: startByte + Buffer.byteLength(sqlSnippet, "utf8"),
+            expectedText: sqlSnippet,
+            rawSnippet: sqlSnippet
+          }
+        }
+      ],
+      {
+        ask: async (question) => {
+          prompts.push(question);
+          return "y";
+        },
+        generateParameterizedFix: async () => sqlSnippet
+      }
+    );
+
+    expect(result).toEqual({ attempted: 0, applied: 0, skipped: 0, unsupported: 1 });
+    expect(prompts).toEqual([]);
+    expect(fs.readFileSync(filePath, "utf8")).toBe(source);
+  });
+
   test("applyScanFixes refuses stale byte offsets instead of corrupting a changed file", async () => {
     const { applyScanFixes, scanProject } = require("../index");
     const root = makeProject({

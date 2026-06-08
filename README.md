@@ -47,13 +47,14 @@ The commit proceeds cleanly and PreFlight prints a receipt so you know the local
 ## Quick Start
 
 ```bash
-# Run a local structural scan on uncommitted changes
+# Run a safe, read-only structural scan on uncommitted changes
 npx preflight-guardian scan . --diff
-```
 
-```bash
+# Run an interactive scan that lets you safely review and auto-patch findings
+npx preflight-guardian scan --fix
+
 # Hook it directly into Claude Code / Cursor via MCP
-preflight mcp install
+preflight install-mcp
 ```
 
 ## Built For The Messy Middle

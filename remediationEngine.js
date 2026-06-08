@@ -12,6 +12,7 @@ const SURGICAL_LLM_SYSTEM_PROMPT =
 const DEFAULT_GEMINI_MODEL = "gemini-1.5-flash";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-coder:free";
+const DEFAULT_LLM_TIMEOUT_MS = 15000;
 const GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const FREE_SQL_REMEDIATION_MESSAGE = [
@@ -25,6 +26,22 @@ const FREE_SQL_REMEDIATION_MESSAGE = [
   "=========================================",
   "[SKIP] Skipping LLM SQL remediation for this run."
 ].join("\n");
+
+function formatProviderFailureMessage(error, provider) {
+  const status = error?.status || error?.code || "unknown";
+  const detail = error?.message || "Provider request failed";
+  const providerLabel = provider?.provider || "custom";
+  const modelLabel = provider?.model || "unknown-model";
+  return [
+    "=========================================",
+    "[SKIP] SQL remediation provider failed.",
+    `Provider: ${providerLabel}`,
+    `Model: ${modelLabel}`,
+    `Error: ${status} ${detail}`,
+    "Local scan will continue without applying the SQL auto-fix.",
+    "========================================="
+  ].join("\n");
+}
 
 let parserReady;
 let javascriptLanguage;
@@ -190,6 +207,12 @@ function logTokenUsage(response, log) {
   log(`\u001b[36m[LLM] Fix completed. Tokens used: ${totalTokens} (Prompt: ${promptTokens}, Completion: ${completionTokens})\u001b[0m`);
 }
 
+function resolveLlmTimeoutMs(env = process.env, options = {}) {
+  const configuredTimeout = options.timeoutMs ?? env.PREFLIGHT_LLM_TIMEOUT_MS;
+  const timeoutMs = Number(configuredTimeout);
+  return Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_LLM_TIMEOUT_MS;
+}
+
 async function generateParameterizedFix(rawSnippet, options = {}) {
   const warn =
     options.warn ||
@@ -214,17 +237,30 @@ async function generateParameterizedFix(rawSnippet, options = {}) {
     provider.client ||
     new OpenAI({
       apiKey: provider.apiKey,
+      maxRetries: 0,
       ...(provider.baseURL ? { baseURL: provider.baseURL } : {})
     });
 
-  const response = await client.chat.completions.create({
-    model: provider.model,
-    messages: [
-      { role: "system", content: SURGICAL_LLM_SYSTEM_PROMPT },
-      { role: "user", content: rawSnippet }
-    ],
-    temperature: 0
-  });
+  let response;
+  try {
+    response = await client.chat.completions.create(
+      {
+        model: provider.model,
+        messages: [
+          { role: "system", content: SURGICAL_LLM_SYSTEM_PROMPT },
+          { role: "user", content: rawSnippet }
+        ],
+        temperature: 0
+      },
+      { timeout: resolveLlmTimeoutMs(process.env, options) }
+    );
+  } catch (error) {
+    warn(formatProviderFailureMessage(error, provider));
+    if (typeof options.onProviderFailure === "function") {
+      options.onProviderFailure(error, provider);
+    }
+    return rawSnippet;
+  }
   logTokenUsage(response, log);
   const proposedFix = extractChatCompletionText(response);
 
@@ -235,9 +271,11 @@ async function generateParameterizedFix(rawSnippet, options = {}) {
 module.exports = {
   FREE_SQL_REMEDIATION_MESSAGE,
   findSqlConcatenations,
+  formatProviderFailureMessage,
   generateParameterizedFix,
   parseJavaScript,
   resolveLlmProvider,
+  resolveLlmTimeoutMs,
   SURGICAL_LLM_SYSTEM_PROMPT,
   verifySyntaxSafety
 };

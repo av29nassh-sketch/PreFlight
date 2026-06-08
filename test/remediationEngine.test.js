@@ -138,6 +138,37 @@ describe("remediationEngine", () => {
     }
   });
 
+  test("generateParameterizedFix skips SQL remediation when the provider returns an API error", async () => {
+    const { generateParameterizedFix } = require("../remediationEngine");
+    const rawSnippet = "\"SELECT * FROM users WHERE id = \" + userId";
+    const warnings = [];
+    const providerFailures = [];
+    const fakeClient = {
+      chat: {
+        completions: {
+          create: async () => {
+            const error = new Error("404 Provider returned error");
+            error.status = 404;
+            throw error;
+          }
+        }
+      }
+    };
+
+    const result = await generateParameterizedFix(rawSnippet, {
+      client: fakeClient,
+      model: "test-model",
+      onProviderFailure: (error, provider) => providerFailures.push({ error, provider }),
+      warn: (message) => warnings.push(message)
+    });
+
+    expect(result).toBe(rawSnippet);
+    expect(warnings[0]).toContain("[SKIP] SQL remediation provider failed");
+    expect(warnings[0]).toContain("404 Provider returned error");
+    expect(providerFailures).toHaveLength(1);
+    expect(providerFailures[0].provider.model).toBe("test-model");
+  });
+
   test("resolveLlmProvider prefers Gemini, then OpenRouter, then OpenAI with MODEL_NAME override", () => {
     const { resolveLlmProvider } = require("../remediationEngine");
 

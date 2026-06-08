@@ -1821,6 +1821,8 @@ async function applyScanFixes(findings, options = {}) {
   const fixesByFile = new Map();
   const scaffoldFixes = [];
   const generateParameterizedFix = options.generateParameterizedFix || generateSqlParameterizedFix;
+  const usesDefaultSqlRemediator = !options.generateParameterizedFix;
+  let sqlRemediationUnavailable = false;
   let attempted = 0;
   let applied = 0;
   let skipped = 0;
@@ -1857,7 +1859,21 @@ async function applyScanFixes(findings, options = {}) {
 
       for (const { fix } of fixes) {
         if (fix.kind === "sql-remediation") {
-          const replacement = await generateParameterizedFix(fix.rawSnippet);
+          if (sqlRemediationUnavailable) {
+            unsupported += 1;
+            continue;
+          }
+          const replacement = usesDefaultSqlRemediator
+            ? await generateParameterizedFix(fix.rawSnippet, {
+                onProviderFailure: () => {
+                  sqlRemediationUnavailable = true;
+                }
+              })
+            : await generateParameterizedFix(fix.rawSnippet);
+          if (replacement === fix.rawSnippet) {
+            unsupported += 1;
+            continue;
+          }
           resolvedFixes.push({
             ...fix,
             replacement
