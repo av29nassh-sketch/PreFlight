@@ -38,8 +38,10 @@ const {
 } = require("./src/ci/ciReporter");
 const {
   activateLicenseKey: activateDefaultLicenseKey,
+  getRepositoryContext: getDefaultRepositoryContext,
   verifyFixPermission: verifyDefaultFixPermission
 } = require("./src/licensing/licenseManager");
+const { reportTelemetry: reportTelemetryDefault } = require("./src/telemetry/cloudReporter");
 const { startMcpServer: startDefaultMcpServer } = require("./src/mcp/server");
 const { installPreCommitHook: installDefaultPreCommitHook } = require("./src/cli/init");
 const {
@@ -2906,12 +2908,37 @@ function applyOpenAiKeyFlag(argv = process.argv) {
   return nextArgv;
 }
 
+function buildTelemetryRepositoryMetadata(rootDir, options = {}) {
+  const repositoryContext = (options.getRepositoryContext || getDefaultRepositoryContext)({
+    cwd: rootDir,
+    env: options.env || process.env
+  });
+  const repository = repositoryContext.repository || {};
+
+  return {
+    remoteUrl: repositoryContext.remoteUrl || repository.remoteUrl || null,
+    host: repository.host || null,
+    owner: repository.owner || null,
+    repo: repository.repo || null,
+    isOrganization: repositoryContext.isOrganization === true
+  };
+}
+
+async function waitForTelemetryFlush(telemetryPromise, timeoutMs = 400) {
+  await Promise.race([
+    Promise.resolve(telemetryPromise).catch(() => {}),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs))
+  ]);
+}
+
 async function runCli(argv = process.argv, options = {}) {
   const normalizedArgv = normalizeCliArgs(applyOpenAiKeyFlag(argv));
   const activateLicenseKey = options.activateLicenseKey || activateDefaultLicenseKey;
   const auditDependencyRunner = options.auditDependencies || auditDependencies;
   const startMcpServer = options.startMcpServer || startDefaultMcpServer;
   const verifyFixPermission = options.verifyFixPermission || verifyDefaultFixPermission;
+  const reportTelemetry = options.reportTelemetry || reportTelemetryDefault;
+  const getRepositoryContextForTelemetry = options.getRepositoryContext;
   const program = new Command();
   program
     .name("preflight")
@@ -3071,6 +3098,18 @@ async function runCli(argv = process.argv, options = {}) {
           rootDir: process.cwd()
         });
       }
+      await waitForTelemetryFlush(reportTelemetry(
+        result.findings || [],
+        buildTelemetryRepositoryMetadata(process.cwd(), {
+          getRepositoryContext: getRepositoryContextForTelemetry,
+          env: process.env
+        }),
+        process.env.PREFLIGHT_TEAMS_KEY || process.env.PREFLIGHT_PRO_KEY,
+        {
+          ci: ciEnvironment.isCi,
+          source: ciEnvironment.isCi ? "ci" : "cli"
+        }
+      ));
       process.exitCode = result.ok ? 0 : 1;
     });
 
@@ -3175,6 +3214,19 @@ async function runCli(argv = process.argv, options = {}) {
         rootDir
       });
     }
+
+    await waitForTelemetryFlush(reportTelemetry(
+      findings,
+      buildTelemetryRepositoryMetadata(rootDir, {
+        getRepositoryContext: getRepositoryContextForTelemetry,
+        env: process.env
+      }),
+      process.env.PREFLIGHT_TEAMS_KEY || process.env.PREFLIGHT_PRO_KEY,
+      {
+        ci: ciEnvironment.isCi,
+        source: ciEnvironment.isCi ? "ci" : "cli"
+      }
+    ));
 
     if (options.fix) {
       const unresolved = (fixResult?.skipped || 0) + (fixResult?.unsupported || 0);

@@ -705,6 +705,75 @@ describe("PreFlight Check", () => {
     expect(writes.join("")).toContain("PreFlight Check found 0 issues.");
   });
 
+  test("scan command fires telemetry with repository metadata after reporting findings", async () => {
+    const { runCli } = require("../index");
+    const root = makeProject({
+      ".git/config": [
+        "[remote \"origin\"]",
+        "  url = https://github.com/CompanyOrg/preflight.git",
+        ""
+      ].join("\n"),
+      "app/api/proxy/route.ts": [
+        "export async function GET(req) {",
+        "  const target = req.nextUrl.searchParams.get('url');",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n")
+    });
+    const writes = [];
+    const telemetryCalls = [];
+    const originalWrite = process.stdout.write;
+
+    process.stdout.write = (chunk, encoding, callback) => {
+      writes.push(String(chunk));
+      if (typeof encoding === "function") {
+        encoding();
+      }
+      if (typeof callback === "function") {
+        callback();
+      }
+      return true;
+    };
+
+    try {
+      process.exitCode = undefined;
+      await runCli(["node", "index.js", "scan", root, "--no-color"], {
+        reportTelemetry: (findings, repoMetadata, licenseKey) =>
+          new Promise((resolve) => {
+            setTimeout(() => {
+              telemetryCalls.push({ findings, repoMetadata, licenseKey });
+              resolve({ reported: true });
+            }, 25);
+          })
+      });
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    expect(process.exitCode).toBe(1);
+    expect(writes.join("")).toContain("PreFlight Check found 1 issue");
+    expect(telemetryCalls).toHaveLength(1);
+    expect(telemetryCalls[0]).toMatchObject({
+      licenseKey: undefined,
+      repoMetadata: {
+        remoteUrl: "https://github.com/CompanyOrg/preflight.git",
+        host: "github.com",
+        owner: "CompanyOrg",
+        repo: "preflight",
+        isOrganization: true
+      }
+    });
+    expect(telemetryCalls[0].findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ssrf",
+          filePath: path.join(root, "app/api/proxy/route.ts")
+        })
+      ])
+    );
+  });
+
   test("mcp command starts the MCP server without scan output", async () => {
     const { runCli } = require("../index");
     const writes = [];
