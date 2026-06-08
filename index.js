@@ -33,6 +33,10 @@ const {
   writePreflightConfigTemplate
 } = require("./src/config/configLoader");
 const {
+  detectCiEnvironment,
+  reportCiFindings
+} = require("./src/ci/ciReporter");
+const {
   activateLicenseKey: activateDefaultLicenseKey,
   verifyFixPermission: verifyDefaultFixPermission
 } = require("./src/licensing/licenseManager");
@@ -1918,6 +1922,23 @@ async function createPromptOptions(options = {}) {
   };
 }
 
+function redactFixPreviewText(value) {
+  if (detectCredential(unquoteTreeString(String(value || ""))) || detectSecret(unquoteTreeString(String(value || "")))) {
+    return "[redacted credential]";
+  }
+
+  return String(value || "").replace(/\r?\n/g, "\\n");
+}
+
+function renderCiFixPreview(filePath, fix) {
+  return [
+    `Proposed fix for ${filePath}`,
+    `-[redacted credential]`.replace("[redacted credential]", redactFixPreviewText(fix.expectedText)),
+    `+${fix.replacement}`,
+    ""
+  ].join("\n");
+}
+
 async function promptAndApplyFix(filePath, node, originalSourceBytes, options = {}) {
   const replacementText = node.replacement;
   const startByte = node.startByte;
@@ -2021,6 +2042,33 @@ async function applyScanFixes(findings, options = {}) {
       fixesByFile.set(item.filePath, []);
     }
     fixesByFile.get(item.filePath).push({ finding: item, fix: item.fix });
+  }
+
+  if (options.ci === true) {
+    const output = options.output || process.stdout;
+    let attemptedPreviews = 0;
+    output.write("CI mode detected. Interactive Auto-Heal prompts are disabled.\n");
+
+    for (const [filePath, fixes] of fixesByFile) {
+      for (const { fix } of fixes) {
+        if (fix.kind === "credential") {
+          output.write(renderCiFixPreview(filePath, fix));
+          attemptedPreviews += 1;
+          continue;
+        }
+
+        unsupported += 1;
+      }
+    }
+
+    unsupported += scaffoldFixes.length;
+    return {
+      attempted: attemptedPreviews,
+      applied: 0,
+      skipped: attemptedPreviews,
+      unsupported,
+      ciBlocked: true
+    };
   }
 
   const { promptOptions, close } = await createPromptOptions(options);
@@ -2651,6 +2699,7 @@ async function runCli(argv = process.argv, options = {}) {
     .option("--stdin", "read the diff from stdin")
     .option("--auto-fix", "return a locally redacted diff for confirmed secret findings")
     .action(async (options) => {
+      const ciEnvironment = detectCiEnvironment(process.env);
       if (!options.stdin && process.stdin.isTTY === true) {
         throw new Error("scan-diff expects --stdin or piped diff input.");
       }
@@ -2659,15 +2708,27 @@ async function runCli(argv = process.argv, options = {}) {
       const result = scanStagedDiff(diff, { autoFix: options.autoFix });
       process.stdout.write(renderDiffScanReceipt(result));
       if (options.autoFix && result.autoPatch) {
-        const accepted = await promptForDiffAutoHeal(result.autoPatch, {
-          color: true,
-          output: process.stdout
-        });
-        if (accepted) {
-          process.stdout.write("Auto-Heal accepted. Patch review complete; no filesystem write was performed by scan-diff.\n");
+        if (ciEnvironment.isCi) {
+          process.stdout.write("CI mode detected. Auto-Heal prompts are disabled.\n");
+          process.stdout.write("Proposed Auto-Heal Patch:\n");
+          process.stdout.write(`${result.autoPatch}\n`);
         } else {
-          process.stdout.write("Auto-Heal declined. No files were changed.\n");
+          const accepted = await promptForDiffAutoHeal(result.autoPatch, {
+            color: true,
+            output: process.stdout
+          });
+          if (accepted) {
+            process.stdout.write("Auto-Heal accepted. Patch review complete; no filesystem write was performed by scan-diff.\n");
+          } else {
+            process.stdout.write("Auto-Heal declined. No files were changed.\n");
+          }
         }
+      }
+      if (ciEnvironment.isCi) {
+        await reportCiFindings(result.findings || [], {
+          env: process.env,
+          rootDir: process.cwd()
+        });
       }
       process.exitCode = result.ok ? 0 : 1;
     });
@@ -2708,6 +2769,7 @@ async function runCli(argv = process.argv, options = {}) {
     });
 
   async function runScanAction(directory, options) {
+    const ciEnvironment = detectCiEnvironment(process.env);
     const requestedPath = path.resolve(directory);
     const requestedStats = await fs.stat(requestedPath);
     const isSingleFileScan = requestedStats.isFile();
@@ -2720,7 +2782,7 @@ async function runCli(argv = process.argv, options = {}) {
         return;
       }
     }
-    if (options.fix && isSingleFileScan) {
+    if (options.fix && isSingleFileScan && !ciEnvironment.isCi) {
       const checkoutRouteResult = await applyCheckoutRouteDemoRemediation(requestedPath, { rootDir });
       if (checkoutRouteResult) {
         process.exitCode = 0;
@@ -2742,9 +2804,12 @@ async function runCli(argv = process.argv, options = {}) {
 
     if (options.fix) {
       fixResult = isSingleFileScan
-        ? await applyAstCredentialRemediation(findings, { rootDir })
+        ? (ciEnvironment.isCi ? null : await applyAstCredentialRemediation(findings, { rootDir }))
         : null;
-      fixResult = fixResult || await applyScanFixes(findings);
+      fixResult = fixResult || await applyScanFixes(findings, {
+        ci: ciEnvironment.isCi,
+        output: process.stdout
+      });
     }
 
     if (options.fix) {
@@ -2760,6 +2825,14 @@ async function runCli(argv = process.argv, options = {}) {
       process.stdout.write(`${JSON.stringify(findings, null, 2)}\n`);
     } else {
       process.stdout.write(renderReport(findings, { color: options.color, stream: process.stdout }));
+    }
+
+    if (ciEnvironment.isCi) {
+      await reportCiFindings(findings, {
+        env: process.env,
+        fixResult,
+        rootDir
+      });
     }
 
     if (options.fix) {

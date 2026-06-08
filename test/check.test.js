@@ -806,6 +806,58 @@ describe("PreFlight Check", () => {
     expect(fs.readFileSync(path.join(root, "dangerous-code.js"), "utf8")).toBe(contents);
   });
 
+  test("scan --fix in CI prints proposed fixes without prompting or mutating files", () => {
+    const contents = "const stripe_key = \"" + STRIPE_KEY + "\";\n";
+    const root = makeProject({
+      "dangerous-code.js": contents
+    });
+    const summaryPath = path.join(root, "summary.md");
+
+    const result = runNode([path.join(__dirname, "..", "index.js"), "scan", root, "--fix", "--no-color"], root, {
+      env: {
+        CI: "true",
+        GITHUB_ACTIONS: "true",
+        GITHUB_STEP_SUMMARY: summaryPath
+      },
+      input: ""
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("CI mode detected. Interactive Auto-Heal prompts are disabled.");
+    expect(result.stdout).toContain("Proposed fix for");
+    expect(result.stdout).toContain("-[redacted credential]");
+    expect(result.stdout).toContain("+process.env.STRIPE_SECRET_KEY");
+    expect(result.stdout).not.toContain("Apply this fix?");
+    expect(fs.readFileSync(path.join(root, "dangerous-code.js"), "utf8")).toBe(contents);
+    expect(fs.readFileSync(summaryPath, "utf8")).toContain("Tri-State Risk Score");
+  });
+
+  test("scan-diff --auto-fix in CI prints the patch without opening the Auto-Heal prompt", () => {
+    const root = makeProject({});
+    const result = runNode([
+      path.join(__dirname, "..", "index.js"),
+      "scan-diff",
+      "--stdin",
+      "--auto-fix"
+    ], root, {
+      env: {
+        CI: "true"
+      },
+      input: [
+        "diff --git a/app.js b/app.js",
+        "+++ b/app.js",
+        "@@ -1 +1 @@",
+        "+const stripe = \"" + STRIPE_KEY + "\";",
+        ""
+      ].join("\n")
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("CI mode detected. Auto-Heal prompts are disabled.");
+    expect(result.stdout).toContain("Proposed Auto-Heal Patch:");
+    expect(result.stdout).not.toContain("[y/n] Accept and Auto-Heal?");
+  });
+
   test("detects all deterministic credential patterns only in string literals", async () => {
     const { scanProject } = require("../index");
     const root = makeProject({
