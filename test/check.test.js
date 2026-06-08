@@ -389,41 +389,6 @@ describe("PreFlight Check", () => {
     expect(result.stderr).not.toContain("Invalid License Key");
   });
 
-  test("scan command prints enterprise context warning before the local scan report", async () => {
-    const { runCli } = require("../index");
-    const root = makeProject({
-      "safe-code.js": "const task_live_status = \"active\";\n"
-    });
-    const writes = [];
-    const originalStdoutWrite = process.stdout.write;
-    const previousExitCode = process.exitCode;
-
-    try {
-      process.exitCode = undefined;
-      process.stdout.write = (chunk) => {
-        writes.push(String(chunk));
-        return true;
-      };
-
-      await runCli(["node", "index.js", "scan", root, "--no-color"], {
-        evaluateCommercialContext: () => ({
-          enterprise: true,
-          owner: "acme-platform",
-          shouldWarn: true,
-          tier: "solo",
-          message: "🟡 Enterprise Context Detected. This repository belongs to an organization workspace but is running via a Solo/Free seat. Please run 'preflight upgrade' or contact your administrator to provision a Team license."
-        })
-      });
-    } finally {
-      process.stdout.write = originalStdoutWrite;
-      process.exitCode = previousExitCode;
-    }
-
-    const output = writes.join("");
-    expect(output.indexOf("🟡 Enterprise Context Detected.")).toBeLessThan(output.indexOf("PreFlight Check found 0 issues."));
-    expect(output).toContain("Team license");
-  });
-
   test("scan command remediates a checkout route with the dual AST demo log", () => {
     const root = makeProject({
       "preflight.config.json": JSON.stringify({ ignoreRules: ["frontend-secret"] }, null, 2),

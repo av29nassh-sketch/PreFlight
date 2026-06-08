@@ -28,10 +28,7 @@ const {
   applyScaffoldTransaction,
   findServerSideLeaks
 } = require("./scaffoldEngine");
-const {
-  activateLicenseKey: activateDefaultLicenseKey,
-  evaluateCommercialContext: evaluateDefaultCommercialContext
-} = require("./src/licensing/licenseManager");
+const { activateLicenseKey: activateDefaultLicenseKey } = require("./src/licensing/licenseManager");
 const { startMcpServer: startDefaultMcpServer } = require("./src/mcp/server");
 const { installPreCommitHook: installDefaultPreCommitHook } = require("./src/cli/init");
 const {
@@ -2335,7 +2332,6 @@ async function runCli(argv = process.argv, options = {}) {
   const normalizedArgv = normalizeCliArgs(applyOpenAiKeyFlag(argv));
   const activateLicenseKey = options.activateLicenseKey || activateDefaultLicenseKey;
   const auditDependencyRunner = options.auditDependencies || auditDependencies;
-  const evaluateCommercialContext = options.evaluateCommercialContext || evaluateDefaultCommercialContext;
   const startMcpServer = options.startMcpServer || startDefaultMcpServer;
   const program = new Command();
   program
@@ -2518,14 +2514,6 @@ async function runCli(argv = process.argv, options = {}) {
 
     const policy = await loadPreflightPolicy(process.cwd());
     const scanPolicy = isSingleFileScan && options.fix ? normalizePolicy() : policy;
-    const commercialContext = evaluateCommercialContext({
-      color: options.color,
-      cwd: rootDir
-    });
-    if (commercialContext.shouldWarn) {
-      process.stdout.write(`${commercialContext.message}\n`);
-    }
-
     const findings = options.diff
       ? await scanProjectDiff(rootDir, { policy: scanPolicy })
       : isSingleFileScan
