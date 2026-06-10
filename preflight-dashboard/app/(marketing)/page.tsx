@@ -1,10 +1,12 @@
+export const dynamic = "force-dynamic";
+
 const terminalLines = [
   { tone: "muted", text: "$ preflight scan --fix" },
   { tone: "warn", text: "HIGH-RISK DRIFT detected in app/api/billing/route.ts" },
   { tone: "muted", text: "-> Sending complex remediation context to Claude 3.5 Sonnet..." },
   { tone: "bad", text: "- const polar = new Polar({ accessToken: 'polar_live_...' })" },
   { tone: "good", text: "+ const polar = new Polar({ accessToken: process.env.POLAR_ACCESS_TOKEN! })" },
-  { tone: "good", text: "✓ Patched unsafe secret handling without changing route behavior" },
+  { tone: "good", text: "Patched unsafe secret handling without changing route behavior" },
   { tone: "muted", text: "PreFlight remediation attempted 1 fix: 1 applied, 0 skipped" }
 ];
 
@@ -29,29 +31,26 @@ const proofCards = [
 const pricing = [
   {
     name: "Free",
-    price: "$0",
-    description: "Five cloud remediation credits for private beta testers and solo builders.",
-    features: ["5 free trial credits", "Local AST scan", "Interactive fix prompts", "No source upload for local checks"],
-    cta: "Use 5 free fixes",
-    href: "/dashboard",
+    description: "Start with the open product surface while the hosted beta stays invite-only.",
+    features: ["Local AST scan", "Interactive fix prompts", "No source upload for local checks", "Open-source starter flow"],
+    cta: "View free version",
+    href: "https://github.com/av29nassh-sketch/PreFlight",
     muted: true
   },
   {
-    name: "Solo",
-    price: "$19/mo",
-    description: "For founders and vibecoders shipping with Cursor, Claude, and Copilot.",
-    features: ["Unlimited deep-logic remediation", "Claude 3.5 Sonnet patching", "CLI login", "Polar/Supabase/Next.js guardrails"],
-    cta: "Start Solo remediation",
-    href: `/signup?redirect_to=${encodeURIComponent("https://polar.sh/YOUR_ORG/products/preflight-solo")}`,
+    name: "Private Beta",
+    description: "For founders and vibecoders who will actively test PreFlight on real projects for the next two weeks.",
+    features: ["14-day full-access beta", "Unlimited deep-logic remediation", "CLI login", "Direct feedback loop with the product"],
+    cta: "Apply for beta",
+    href: "https://waitlister.me/p/preflight",
     featured: true
   },
   {
-    name: "Teams",
-    price: "$49/seat/mo",
-    description: "For engineering teams enforcing AI-code safety across repos.",
-    features: ["Everything in Solo", "Org repository enforcement", "Team telemetry dashboard", "CI and MCP governance"],
-    cta: "Start team checkout",
-    href: `/signup?redirect_to=${encodeURIComponent("https://polar.sh/YOUR_ORG/products/preflight-teams")}`
+    name: "Teams Waitlist",
+    description: "For engineering teams that want policy, telemetry, and shared rollout once the beta expands.",
+    features: ["Org repository enforcement", "Team telemetry dashboard", "CI and MCP governance", "Priority access when team onboarding opens"],
+    cta: "Join waitlist",
+    href: "https://waitlister.me/p/preflight"
   }
 ];
 
@@ -98,14 +97,6 @@ export default function MarketingPage() {
           <a className="font-mono text-sm font-semibold uppercase tracking-[0.2em] text-emerald-300" href="/">
             PreFlight
           </a>
-          <div className="flex items-center gap-3 text-sm text-zinc-400">
-            <a className="rounded-md px-3 py-2 hover:bg-zinc-900 hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300" href="/dashboard">
-              Dashboard
-            </a>
-            <a className="rounded-md border border-zinc-700 px-3 py-2 text-zinc-100 hover:border-zinc-500 hover:bg-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-300" href="/login">
-              Login
-            </a>
-          </div>
         </nav>
       </header>
 
@@ -122,14 +113,14 @@ export default function MarketingPage() {
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <a className="inline-flex h-12 items-center justify-center rounded-md bg-emerald-300 px-5 text-sm font-semibold text-zinc-950 hover:bg-emerald-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 active:translate-y-px" href="#pricing">
-              Compare plans
+              View beta access
             </a>
-            <a className="inline-flex h-12 items-center justify-center rounded-md border border-zinc-700 px-5 text-sm font-semibold text-zinc-100 hover:border-zinc-500 hover:bg-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 active:translate-y-px" href="/dashboard">
-              Open dashboard
+            <a className="inline-flex h-12 items-center justify-center rounded-md border border-zinc-700 px-5 text-sm font-semibold text-zinc-100 hover:border-zinc-500 hover:bg-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 active:translate-y-px" href="https://waitlister.me/p/preflight">
+              Apply for beta
             </a>
           </div>
           <div className="mt-8 grid max-w-2xl grid-cols-3 gap-3 text-sm">
-            {["AST proof", "Claude patching", "Polar MoR"].map((item) => (
+            {["AST proof", "Private beta", "Direct feedback"].map((item) => (
               <div className="rounded-md border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-zinc-300" key={item}>
                 {item}
               </div>
@@ -156,10 +147,10 @@ export default function MarketingPage() {
 
       <section className="relative z-10 mx-auto max-w-7xl px-6 py-16" id="pricing">
         <div className="max-w-2xl">
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Pricing</div>
-          <h2 className="mt-4 text-4xl font-semibold text-zinc-50">Start free, upgrade when Claude starts doing the heavy lifting.</h2>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Beta Access</div>
+          <h2 className="mt-4 text-4xl font-semibold text-zinc-50">Public checkout is paused while PreFlight runs a small private beta.</h2>
           <p className="mt-4 text-base leading-7 text-zinc-400">
-            Free local scans stay local. Paid tiers unlock unlimited deep-logic AI remediation and governance workflows.
+            I am onboarding 5-10 serious testers manually for a 14-day run. If you want hosted access, apply for beta and I will reach out if it is a fit.
           </p>
         </div>
 
@@ -180,11 +171,10 @@ export default function MarketingPage() {
                 </div>
                 {plan.featured ? (
                   <span className="rounded-md bg-emerald-300 px-2.5 py-1 text-xs font-bold uppercase tracking-[0.14em] text-zinc-950">
-                    Pro
+                    14 days
                   </span>
                 ) : null}
               </div>
-              <div className="mt-6 text-4xl font-semibold text-zinc-50">{plan.price}</div>
               <ul className="mt-6 space-y-3 text-sm text-zinc-300">
                 {plan.features.map((feature) => (
                   <li className="flex gap-3" key={feature}>
@@ -194,12 +184,12 @@ export default function MarketingPage() {
                 ))}
               </ul>
               <a
+                href={plan.href}
                 className={
                   plan.featured
                     ? "mt-7 inline-flex h-12 w-full items-center justify-center rounded-md bg-zinc-50 px-5 text-sm font-semibold text-zinc-950 hover:bg-emerald-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 active:translate-y-px disabled:cursor-wait disabled:opacity-70"
                     : "mt-7 inline-flex h-12 w-full items-center justify-center rounded-md border border-zinc-700 px-5 text-sm font-semibold text-zinc-100 hover:border-zinc-500 hover:bg-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 active:translate-y-px"
                 }
-                href={plan.href}
               >
                 {plan.cta}
               </a>
