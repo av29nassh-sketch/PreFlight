@@ -163,6 +163,57 @@ describe("PreFlight Check", () => {
     );
   });
 
+  test("folds array joins only from statically declared same-scope constants", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/dashboard/page.tsx": [
+        "\"use client\";",
+        "",
+        "export default function Dashboard() {",
+        "  const prefix = \"sk\";",
+        "  const mode = \"_live_\";",
+        "  const tail = \"1234567890abcdef\";",
+        "  const key = [prefix, mode, tail].join(\"\");",
+        "  return <main>{key}</main>;",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "frontend-secret",
+          filePath: path.join(root, "app/dashboard/page.tsx"),
+          line: 7,
+          evidence: "Stripe Secret Key"
+        })
+      ])
+    );
+  });
+
+  test("does not fold constants declared after the expression reads them", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/dashboard/page.tsx": [
+        "\"use client\";",
+        "",
+        "export default function Dashboard() {",
+        "  const key = [prefix, mode, tail].join(\"\");",
+        "  const prefix = \"sk\";",
+        "  const mode = \"_live_\";",
+        "  const tail = \"1234567890abcdef\";",
+        "  return <main>{key}</main>;",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings.some((finding) => finding.ruleId === "frontend-secret")).toBe(false);
+  });
+
   test("flags Supabase service role environment references in pages components", async () => {
     const { scanProject } = require("../index");
     const root = makeProject({
@@ -926,6 +977,153 @@ describe("PreFlight Check", () => {
         })
       ])
     );
+  });
+
+  test("scan command surfaces ambiguous reasoning results and uses them for exit state", async () => {
+    const { runCli } = require("../index");
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "import { normalizeTarget } from '../../lib/url-tools';",
+        "export async function preview(req) {",
+        "  \"use server\";",
+        "  const body = await req.json();",
+        "  const target = normalizeTarget(body.url);",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n"),
+      "lib/url-tools.ts": "export const normalizeTarget = (url) => url;\n"
+    });
+    const writes = [];
+    const originalWrite = process.stdout.write;
+
+    process.stdout.write = (chunk, encoding, callback) => {
+      writes.push(String(chunk));
+      if (typeof encoding === "function") {
+        encoding();
+      }
+      if (typeof callback === "function") {
+        callback();
+      }
+      return true;
+    };
+
+    try {
+      process.exitCode = undefined;
+      await runCli(["node", "index.js", "scan", root, "--no-color"], {
+        reportTelemetry: async () => ({ reported: false }),
+        routeAmbiguous: true,
+        routeDeepRemediation: async () => ({
+          routed: "reasoning",
+          verdict: {
+            state: "VULNERABLE",
+            reasoning: "Imported URL normalizer returns tainted request input.",
+            manual_qa_line: null,
+            auto_patch: null
+          }
+        })
+      });
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    expect(process.exitCode).toBe(1);
+    expect(writes.join("")).toContain("Imported URL normalizer returns tainted request input.");
+    expect(writes.join("")).toContain("llm-reasoning");
+  });
+
+  test("scan command prints the paywall message when cloud remediation returns 402", async () => {
+    const { PAYWALL_UPGRADE_MESSAGE, PreFlightPaymentRequiredError } = require("../src/router/cloud");
+    const { runCli } = require("../index");
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "import { normalizeTarget } from '../../lib/url-tools';",
+        "export async function preview(req) {",
+        "  \"use server\";",
+        "  const body = await req.json();",
+        "  const target = normalizeTarget(body.url);",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n"),
+      "lib/url-tools.ts": "export const normalizeTarget = (url) => url;\n"
+    });
+    const writes = [];
+    const originalWrite = process.stdout.write;
+
+    process.stdout.write = (chunk, encoding, callback) => {
+      writes.push(String(chunk));
+      if (typeof encoding === "function") {
+        encoding();
+      }
+      if (typeof callback === "function") {
+        callback();
+      }
+      return true;
+    };
+
+    try {
+      process.exitCode = undefined;
+      await runCli(["node", "index.js", "scan", root, "--no-color"], {
+        reportTelemetry: async () => ({ reported: false }),
+        routeAmbiguous: true,
+        routeDeepRemediation: async () => {
+          throw new PreFlightPaymentRequiredError();
+        }
+      });
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    expect(process.exitCode).toBe(1);
+    expect(writes.join("")).toContain(PAYWALL_UPGRADE_MESSAGE);
+  });
+
+  test("scan command prints the manual review message when cloud remediation refuses auto patching", async () => {
+    const { MANUAL_REVIEW_MESSAGE, ManualReviewRequiredError } = require("../src/router/cloud");
+    const { runCli } = require("../index");
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "import { normalizeTarget } from '../../lib/url-tools';",
+        "export async function preview(req) {",
+        "  \"use server\";",
+        "  const body = await req.json();",
+        "  const target = normalizeTarget(body.url);",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n"),
+      "lib/url-tools.ts": "export const normalizeTarget = (url) => url;\n"
+    });
+    const writes = [];
+    const originalWrite = process.stdout.write;
+
+    process.stdout.write = (chunk, encoding, callback) => {
+      writes.push(String(chunk));
+      if (typeof encoding === "function") {
+        encoding();
+      }
+      if (typeof callback === "function") {
+        callback();
+      }
+      return true;
+    };
+
+    try {
+      process.exitCode = undefined;
+      await runCli(["node", "index.js", "scan", root, "--no-color"], {
+        reportTelemetry: async () => ({ reported: false }),
+        routeAmbiguous: true,
+        routeDeepRemediation: async () => {
+          throw new ManualReviewRequiredError();
+        }
+      });
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    expect(process.exitCode).toBe(1);
+    expect(writes.join("")).toContain(MANUAL_REVIEW_MESSAGE);
   });
 
   test("mcp command starts the MCP server without scan output", async () => {
@@ -1742,6 +1940,166 @@ describe("PreFlight Check", () => {
     );
   });
 
+  test("backend SSRF scan surrenders when taint crosses an imported function boundary", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "import { normalizeTarget } from '../../lib/url-tools';",
+        "export async function preview(req) {",
+        "  \"use server\";",
+        "  const body = await req.json();",
+        "  const target = normalizeTarget(body.url);",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n"),
+      "lib/url-tools.ts": "export const normalizeTarget = (url) => url;\n"
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ambiguous-ast",
+          state: "AMBIGUOUS",
+          filePath: path.join(root, "app/actions/proxy.ts"),
+          evidence: "tainted value passed into imported function normalizeTarget"
+        })
+      ])
+    );
+    expect(findings.some((finding) => finding.ruleId === "ssrf")).toBe(false);
+  });
+
+  test("backend SSRF scan surrenders on tainted dynamic dispatch", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/actions/dispatch.ts": [
+        "export async function dispatch(req) {",
+        "  \"use server\";",
+        "  const body = await req.json();",
+        "  const handlers = { safe: () => true };",
+        "  return handlers[body.action]();",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ambiguous-ast",
+          state: "AMBIGUOUS",
+          filePath: path.join(root, "app/actions/dispatch.ts"),
+          evidence: "tainted dynamic dispatch"
+        })
+      ])
+    );
+  });
+
+  test("backend SSRF scan surrenders when tainted dynamic dispatch is aliased before invocation", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/actions/dispatch.ts": [
+        "export async function dispatch(req) {",
+        "  \"use server\";",
+        "  const body = await req.json();",
+        "  const handlers = { safe: () => true };",
+        "  const selected = handlers[body.action];",
+        "  return selected();",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ambiguous-ast",
+          state: "AMBIGUOUS",
+          filePath: path.join(root, "app/actions/dispatch.ts"),
+          evidence: "tainted dynamic dispatch via selected"
+        })
+      ])
+    );
+  });
+
+  test("backend SSRF scan surrenders when a tainted object hits an unknown mutator", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "export async function preview(req) {",
+        "  \"use server\";",
+        "  const body = await req.json();",
+        "  const payload = { url: body.url };",
+        "  mutatePayload(payload);",
+        "  return fetch(payload.url);",
+        "}",
+        ""
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "ambiguous-ast",
+          state: "AMBIGUOUS",
+          filePath: path.join(root, "app/actions/proxy.ts"),
+          evidence: "tainted object passed into unknown function mutatePayload"
+        })
+      ])
+    );
+    expect(findings.some((finding) => finding.ruleId === "ssrf")).toBe(false);
+  });
+
+  test("ambiguous findings are packaged with imports for deep reasoning", async () => {
+    const { routeAmbiguousFindingsToReasoning, scanProject } = require("../index");
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "import { normalizeTarget } from '../../lib/url-tools';",
+        "export async function preview(req) {",
+        "  \"use server\";",
+        "  const body = await req.json();",
+        "  const target = normalizeTarget(body.url);",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n"),
+      "lib/url-tools.ts": "export const normalizeTarget = (url) => url;\n"
+    });
+    const findings = await scanProject(root);
+    let captured;
+
+    const result = await routeAmbiguousFindingsToReasoning(findings, {
+      rootDir: root,
+      routeDeepRemediation: async (context) => {
+        captured = context;
+        return { routed: "reasoning", patchSet: { patches: [], explanation: "queued" } };
+      }
+    });
+
+    expect(result.routed).toBe("reasoning");
+    expect(captured.diff).toContain("AMBIGUOUS");
+    expect(captured.files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          filePath: "app/actions/proxy.ts",
+          content: expect.stringContaining("normalizeTarget")
+        }),
+        expect.objectContaining({
+          filePath: "lib/url-tools.ts",
+          content: expect.stringContaining("normalizeTarget")
+        })
+      ])
+    );
+  });
+
   test("backend SSRF scan treats Next.js server actions as backend sources", async () => {
     const { scanProject } = require("../index");
     const root = makeProject({
@@ -1769,7 +2127,7 @@ describe("PreFlight Check", () => {
     );
   });
 
-  test("backend SSRF scan does not trust inline dummy validators", async () => {
+  test("backend SSRF scan surrenders instead of trusting inline dummy validators", async () => {
     const { scanProject } = require("../index");
     const root = makeProject({
       "app/api/proxy/route.ts": [
@@ -1788,12 +2146,14 @@ describe("PreFlight Check", () => {
     expect(findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          ruleId: "ssrf",
-          line: 5,
-          evidence: "fetch(safeTarget)"
+          ruleId: "ambiguous-ast",
+          state: "AMBIGUOUS",
+          line: 4,
+          evidence: "tainted object passed into unknown function validateOutboundUrl"
         })
       ])
     );
+    expect(findings.some((finding) => finding.ruleId === "ssrf")).toBe(false);
   });
 
   test("backend SSRF scan propagates taint through destructuring and reassignments", async () => {

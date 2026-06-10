@@ -1,0 +1,15 @@
+diff --git a/supabase/migrations/bad.rls-bypass.sql b/supabase/migrations/bad.rls-bypass.sql
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/supabase/migrations/bad.rls-bypass.sql
+@@ -0,0 +1,9 @@
++create table public.profiles (
++  id uuid primary key,
++  email text not null
++);
++alter table public.profiles enable row level security;
++create policy "bad_profiles_read_all"
++on public.profiles
++for select
++using (true);

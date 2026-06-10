@@ -1,0 +1,15 @@
+diff --git a/supabase/migrations/fixed.rls-bypass.sql b/supabase/migrations/fixed.rls-bypass.sql
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/supabase/migrations/fixed.rls-bypass.sql
+@@ -0,0 +1,9 @@
++create table public.accounts (
++  id uuid primary key,
++  email text not null
++);
++alter table public.accounts enable row level security;
++create policy "fixed_accounts_read_self"
++on public.accounts
++for select
++using (auth.uid() = id);

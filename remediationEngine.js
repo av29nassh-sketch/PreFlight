@@ -17,6 +17,9 @@ const DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-coder:free";
 const DEFAULT_LLM_TIMEOUT_MS = 15000;
 const GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED";
+const MANUAL_REVIEW_MESSAGE =
+  "⚠️ Manual Review Recommended: This vulnerability requires specific architectural context to fix safely. PreFlight has skipped auto-remediation to protect your build logic.";
 const FREE_SQL_REMEDIATION_MESSAGE = [
   "=========================================",
   "💡 SQL Remediation is available for FREE!",
@@ -330,7 +333,28 @@ function renderMultiFilePatchPreview(patchSet) {
   return lines.join("\n");
 }
 
+function stripMarkdownFenceText(value) {
+  const text = String(value || "").trim();
+  const fenced = text.match(/^```[A-Za-z0-9_-]*\s*\r?\n([\s\S]*?)\r?\n```$/);
+  return (fenced ? fenced[1] : text).trim();
+}
+
+function isManualReviewPayload(value) {
+  return stripMarkdownFenceText(value) === MANUAL_REVIEW_REQUIRED;
+}
+
 async function applyMultiFilePatchSet(patchSet, options = {}) {
+  const output = options.output || process.stdout;
+  if (typeof patchSet === "string" && isManualReviewPayload(patchSet)) {
+    output.write(`${MANUAL_REVIEW_MESSAGE}\n`);
+    return {
+      attempted: 0,
+      applied: 0,
+      skipped: 0,
+      manualReviewRequired: true
+    };
+  }
+
   const normalizedPatchSet = patchSet?.patches
     ? {
         patches: patchSet.patches.map((patch, index) => normalizeMultiFilePatch({
@@ -341,7 +365,6 @@ async function applyMultiFilePatchSet(patchSet, options = {}) {
         explanation: patchSet.explanation
       }
     : parseMultiFileRemediationJson(patchSet);
-  const output = options.output || process.stdout;
   output.write(`${renderMultiFilePatchPreview(normalizedPatchSet)}\n`);
 
   const answer = await askDeepPatchQuestion("[y/n] Apply entire multi-file architectural patch? ", options);
@@ -437,6 +460,8 @@ module.exports = {
   findSqlConcatenations,
   formatProviderFailureMessage,
   generateParameterizedFix,
+  MANUAL_REVIEW_MESSAGE,
+  MANUAL_REVIEW_REQUIRED,
   parseMultiFileRemediationJson,
   parseJavaScript,
   resolveLlmProvider,

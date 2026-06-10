@@ -67,6 +67,7 @@ async function writeConfig(config, options = {}) {
     encoding: "utf8",
     mode: 0o600
   });
+  await fs.promises.chmod(configPath, 0o600).catch(() => {});
 }
 
 function postFormUrlEncoded(request) {
@@ -324,7 +325,19 @@ function resolveLicenseTier(validationResult, config = {}, env = process.env, op
 }
 
 function resolveConfiguredLicenseKey(config = {}, env = process.env) {
-  return config.licenseKey || env.PREFLIGHT_PRO_KEY || env.PREFLIGHT_PRO_LICENSE_KEY || null;
+  return (
+    env.PREFLIGHT_PRO_KEY ||
+    env.PREFLIGHT_TEAMS_KEY ||
+    env.PREFLIGHT_PRO_LICENSE_KEY ||
+    config.licenseKey ||
+    null
+  );
+}
+
+async function resolveStoredLicenseKey(options = {}) {
+  const env = options.env || process.env;
+  const config = options.config || await readConfig(options);
+  return resolveConfiguredLicenseKey(config, env);
 }
 
 function repositoryOwnershipBlock(repository, tier) {
@@ -529,6 +542,8 @@ module.exports = {
   readConfig,
   readGitRemoteOriginUrl,
   recordFreeFixUsage,
+  resolveConfiguredLicenseKey,
+  resolveStoredLicenseKey,
   resolveLicenseTier,
   verifyFixPermission,
   writeConfig

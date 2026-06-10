@@ -4,6 +4,11 @@ coverage/
 dist/
 *.log
 *.tgz
+.env
+.env.*
 demo-sandbox/
 test-sandbox/
 preflight.config.json
+
+.vercel
+.env*.local

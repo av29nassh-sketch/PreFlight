@@ -39,11 +39,20 @@ const {
 const {
   activateLicenseKey: activateDefaultLicenseKey,
   getRepositoryContext: getDefaultRepositoryContext,
+  resolveStoredLicenseKey: resolveDefaultStoredLicenseKey,
   verifyFixPermission: verifyDefaultFixPermission
 } = require("./src/licensing/licenseManager");
 const { reportTelemetry: reportTelemetryDefault } = require("./src/telemetry/cloudReporter");
+const {
+  isManualReviewRequiredError,
+  isPaymentRequiredError,
+  MANUAL_REVIEW_MESSAGE,
+  PAYWALL_UPGRADE_MESSAGE,
+  routeDeepRemediation: routeDeepRemediationDefault
+} = require("./src/router/cloud");
 const { startMcpServer: startDefaultMcpServer } = require("./src/mcp/server");
 const { installPreCommitHook: installDefaultPreCommitHook } = require("./src/cli/init");
+const { startCliLogin: startDefaultCliLogin } = require("./src/cli/login");
 const {
   promptForAutoHeal: promptForDiffAutoHeal,
   renderScanReceipt: renderDiffScanReceipt,
@@ -1043,10 +1052,49 @@ function readQuotedStaticString(value, startIndex = 0) {
   return null;
 }
 
-function staticStringFromInlineExpressionText(expressionText) {
+function findLexicalScopeNode(node) {
+  let cursor = node?.parent || null;
+  while (cursor) {
+    if (cursor.type === "statement_block" || cursor.type === "program") {
+      return cursor;
+    }
+    cursor = cursor.parent || null;
+  }
+  return null;
+}
+
+function lexicalScopeKey(node) {
+  const scopeNode = findLexicalScopeNode(node);
+  return scopeNode ? `${scopeNode.startIndex}:${scopeNode.endIndex}` : "global";
+}
+
+function lookupStaticBinding(identifier, context = {}) {
+  const scopeKey = context.scopeKey || (context.node ? lexicalScopeKey(context.node) : null);
+  if (!scopeKey || !context.bindings) {
+    return null;
+  }
+
+  const binding = context.bindings.get(`${scopeKey}:${identifier}`);
+  if (!binding) {
+    return null;
+  }
+
+  const readIndex = Number.isFinite(context.readIndex)
+    ? context.readIndex
+    : Number.isFinite(context.node?.startIndex)
+      ? context.node.startIndex
+      : Number.POSITIVE_INFINITY;
+  return binding.declarationEndIndex <= readIndex ? binding.value : null;
+}
+
+function staticStringFromInlineExpressionText(expressionText, context = {}) {
   const text = String(expressionText || "").trim();
   if (text === "") {
     return "";
+  }
+
+  if (/^[A-Za-z_$][\w$]*$/.test(text)) {
+    return lookupStaticBinding(text, context);
   }
 
   if (/^['"`]/.test(text)) {
@@ -1061,11 +1109,21 @@ function staticStringFromInlineExpressionText(expressionText) {
       cursor += 1;
     }
     const part = readQuotedStaticString(text, cursor);
-    if (!part) {
-      return null;
+    if (part) {
+      binaryParts.push(part.value);
+      cursor = part.endIndex;
+    } else {
+      const identifier = /^[A-Za-z_$][\w$]*/.exec(text.slice(cursor));
+      if (!identifier) {
+        return null;
+      }
+      const boundValue = lookupStaticBinding(identifier[0], context);
+      if (boundValue === null) {
+        return null;
+      }
+      binaryParts.push(boundValue);
+      cursor += identifier[0].length;
     }
-    binaryParts.push(part.value);
-    cursor = part.endIndex;
     while (/\s/.test(text[cursor] || "")) {
       cursor += 1;
     }
@@ -1081,7 +1139,7 @@ function staticStringFromInlineExpressionText(expressionText) {
   return binaryParts.length > 0 ? binaryParts.join("") : null;
 }
 
-function staticStringArrayFromText(arrayText) {
+function staticStringArrayFromText(arrayText, context = {}) {
   const text = String(arrayText || "").trim();
   if (!text.startsWith("[") || !text.endsWith("]")) {
     return null;
@@ -1098,11 +1156,21 @@ function staticStringArrayFromText(arrayText) {
     }
 
     const quoted = readQuotedStaticString(text, cursor);
-    if (!quoted) {
-      return null;
+    if (quoted) {
+      values.push(quoted.value);
+      cursor = quoted.endIndex;
+    } else {
+      const identifier = /^[A-Za-z_$][\w$]*/.exec(text.slice(cursor));
+      if (!identifier) {
+        return null;
+      }
+      const boundValue = lookupStaticBinding(identifier[0], context);
+      if (boundValue === null) {
+        return null;
+      }
+      values.push(boundValue);
+      cursor += identifier[0].length;
     }
-    values.push(quoted.value);
-    cursor = quoted.endIndex;
     while (/\s/.test(text[cursor] || "")) {
       cursor += 1;
     }
@@ -1118,14 +1186,14 @@ function staticStringArrayFromText(arrayText) {
   return values;
 }
 
-function staticStringFromArrayJoinText(callText) {
+function staticStringFromArrayJoinText(callText, context = {}) {
   const text = String(callText || "").trim();
   const joinMatch = /^(\[[\s\S]*\])\s*\.\s*join\s*\(\s*([\s\S]*?)\s*\)$/.exec(text);
   if (!joinMatch) {
     return null;
   }
 
-  const values = staticStringArrayFromText(joinMatch[1]);
+  const values = staticStringArrayFromText(joinMatch[1], context);
   if (!values) {
     return null;
   }
@@ -1133,11 +1201,11 @@ function staticStringFromArrayJoinText(callText) {
   const separatorText = joinMatch[2].trim();
   const separator = separatorText === ""
     ? ","
-    : staticStringFromInlineExpressionText(separatorText);
+    : staticStringFromInlineExpressionText(separatorText, context);
   return separator === null ? null : values.join(separator);
 }
 
-function staticStringFromTemplateText(templateText) {
+function staticStringFromTemplateText(templateText, context = {}) {
   const text = String(templateText || "").trim();
   if (!text.startsWith("`") || !text.endsWith("`")) {
     return null;
@@ -1172,7 +1240,7 @@ function staticStringFromTemplateText(templateText) {
       }
 
       const expressionText = text.slice(cursor + 2, expressionCursor - 1);
-      const expressionValue = staticStringFromInlineExpressionText(expressionText);
+      const expressionValue = staticStringFromInlineExpressionText(expressionText, context);
       if (expressionValue === null) {
         return null;
       }
@@ -1188,25 +1256,36 @@ function staticStringFromTemplateText(templateText) {
   return output;
 }
 
-function staticStringFromNode(sourceCode, node) {
+function staticStringFromNode(sourceCode, node, context = {}) {
   if (!node) {
     return null;
   }
+
+  const scopedContext = {
+    ...context,
+    node,
+    scopeKey: context.scopeKey || lexicalScopeKey(node),
+    readIndex: Number.isFinite(context.readIndex) ? context.readIndex : node.startIndex
+  };
 
   if (node.type === "string") {
     return unquoteTreeString(textFromNode(sourceCode, node));
   }
 
+  if (node.type === "identifier") {
+    return lookupStaticBinding(textFromNode(sourceCode, node), scopedContext);
+  }
+
   if (node.type === "parenthesized_expression" && node.namedChildCount === 1) {
-    return staticStringFromNode(sourceCode, node.namedChild(0));
+    return staticStringFromNode(sourceCode, node.namedChild(0), scopedContext);
   }
 
   if (node.type === "template_string") {
-    return staticStringFromTemplateText(textFromNode(sourceCode, node));
+    return staticStringFromTemplateText(textFromNode(sourceCode, node), scopedContext);
   }
 
   if (node.type === "call_expression") {
-    return staticStringFromArrayJoinText(textFromNode(sourceCode, node));
+    return staticStringFromArrayJoinText(textFromNode(sourceCode, node), scopedContext);
   }
 
   if (node.type !== "binary_expression") {
@@ -1219,9 +1298,51 @@ function staticStringFromNode(sourceCode, node) {
 
   const leftNode = childForField(node, "left") || node.namedChild(0);
   const rightNode = childForField(node, "right") || node.namedChild(1);
-  const left = staticStringFromNode(sourceCode, leftNode);
-  const right = staticStringFromNode(sourceCode, rightNode);
+  const left = staticStringFromNode(sourceCode, leftNode, scopedContext);
+  const right = staticStringFromNode(sourceCode, rightNode, scopedContext);
   return left === null || right === null ? null : `${left}${right}`;
+}
+
+function isConstVariableDeclarator(sourceCode, node) {
+  const parentText = node?.parent ? textFromNode(sourceCode, node.parent).trim() : "";
+  return /^const\b/.test(parentText);
+}
+
+function collectStaticStringBindings(tree, sourceCode) {
+  const bindings = new Map();
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    walkTree(tree.rootNode, (node) => {
+      if (node.type !== "variable_declarator" || !isConstVariableDeclarator(sourceCode, node)) {
+        return;
+      }
+
+      const nameNode = childForField(node, "name");
+      const valueNode = childForField(node, "value");
+      if (!nameNode || !valueNode || nameNode.type !== "identifier") {
+        return;
+      }
+
+      const scopeKey = lexicalScopeKey(node);
+      const bindingKey = `${scopeKey}:${textFromNode(sourceCode, nameNode)}`;
+      if (bindings.has(bindingKey)) {
+        return;
+      }
+
+      const value = staticStringFromNode(sourceCode, valueNode, { bindings, scopeKey });
+      if (value !== null) {
+        bindings.set(bindingKey, {
+          value,
+          declarationEndIndex: node.endIndex
+        });
+        changed = true;
+      }
+    });
+  }
+
+  return bindings;
 }
 
 function credentialFindingForStaticValue({ filePath, relativePath, sourceCode, node, value, requireClientComponent }) {
@@ -1252,6 +1373,7 @@ function scanCredentialStrings({ filePath, relativePath, sourceCode, tree, requi
   }
 
   const findings = [];
+  const staticBindings = collectStaticStringBindings(tree, sourceCode);
   walkTree(tree.rootNode, (node) => {
     if (node.type === "string") {
       const rawString = textFromNode(sourceCode, node);
@@ -1277,7 +1399,7 @@ function scanCredentialStrings({ filePath, relativePath, sourceCode, tree, requi
     }
 
     if (["binary_expression", "call_expression", "template_string"].includes(node.type)) {
-      const staticValue = staticStringFromNode(sourceCode, node);
+      const staticValue = staticStringFromNode(sourceCode, node, { bindings: staticBindings });
       const staticFinding = credentialFindingForStaticValue({
         filePath,
         relativePath,
@@ -1545,6 +1667,68 @@ function isTrustedSafeUrlValidatorCallText(callText, trustedValidators) {
   return Boolean(match && isTrustedSafeUrlValidatorCallee(match[1], trustedValidators));
 }
 
+function collectImportedCallTargets(tree, sourceCode) {
+  const imported = {
+    functions: new Set(),
+    namespaces: new Set()
+  };
+
+  walkTree(tree.rootNode, (node) => {
+    if (node.type !== "import_statement") {
+      return;
+    }
+
+    const importText = textFromNode(sourceCode, node);
+    const namespaceMatch = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(importText);
+    if (namespaceMatch) {
+      imported.namespaces.add(namespaceMatch[1]);
+    }
+
+    const namedMatch = /\{([^}]+)\}/.exec(importText);
+    if (namedMatch) {
+      for (const part of namedMatch[1].split(",")) {
+        const [importedName, localName] = part.trim().split(/\s+as\s+/i).map((value) => value.trim());
+        const bindingName = localName || importedName;
+        if (/^[A-Za-z_$][\w$]*$/.test(bindingName || "")) {
+          imported.functions.add(bindingName);
+        }
+      }
+    }
+
+    const defaultMatch = /^\s*import\s+([A-Za-z_$][\w$]*)\s*(?:,|\s+from\b)/.exec(importText);
+    if (defaultMatch) {
+      imported.functions.add(defaultMatch[1]);
+    }
+  });
+
+  return imported;
+}
+
+function rootIdentifierFromCallee(calleeText) {
+  const match = /^([A-Za-z_$][\w$]*)/.exec(String(calleeText || ""));
+  return match ? match[1] : null;
+}
+
+function isImportedCallee(calleeText, importedCallTargets) {
+  const compact = String(calleeText || "").replace(/\s+/g, "");
+  if (importedCallTargets.functions.has(compact)) {
+    return true;
+  }
+
+  const member = /^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/.exec(compact);
+  return Boolean(member && importedCallTargets.namespaces.has(member[1]));
+}
+
+function isKnownImmutableTaintApi(calleeText) {
+  return /^(?:JSON\.(?:parse|stringify)|Object\.(?:assign|fromEntries))$/.test(
+    String(calleeText || "").replace(/\s+/g, "")
+  );
+}
+
+function isKnownNonMutatingFrameworkCallee(calleeText) {
+  return /^(?:Response\.json|NextResponse\.json|res\.json)$/.test(String(calleeText || "").replace(/\s+/g, ""));
+}
+
 function collectPatternIdentifiers(node, sourceCode, identifiers = []) {
   if (!node) {
     return identifiers;
@@ -1566,10 +1750,27 @@ function collectPatternIdentifiers(node, sourceCode, identifiers = []) {
   return identifiers;
 }
 
-function collectSsrfDataflow(tree, sourceCode, trustedValidators) {
+function collectSsrfDataflow(tree, sourceCode, trustedValidators, importedCallTargets = collectImportedCallTargets(tree, sourceCode)) {
   const taintedVariables = new Set();
   const validatedVariables = new Set();
+  const dynamicCallableVariables = new Set();
+  const hardStops = [];
+  const hardStopKeys = new Set();
   let changed = true;
+
+  const addHardStop = ({ node, reason, evidence }) => {
+    const key = `${reason}:${node.startIndex}:${evidence}`;
+    if (hardStopKeys.has(key)) {
+      return;
+    }
+
+    hardStopKeys.add(key);
+    hardStops.push({
+      node,
+      reason,
+      evidence
+    });
+  };
 
   while (changed) {
     changed = false;
@@ -1584,6 +1785,15 @@ function collectSsrfDataflow(tree, sourceCode, trustedValidators) {
         const valueText = textFromNode(sourceCode, valueNode);
         const names = collectPatternIdentifiers(nameNode, sourceCode);
         const isValidated = isTrustedSafeUrlValidatorCallText(valueText, trustedValidators);
+        if (/\[[\s\S]+\]/.test(valueText) && isUserControlledUrlExpression(valueText, taintedVariables)) {
+          for (const name of names) {
+            if (!dynamicCallableVariables.has(name)) {
+              dynamicCallableVariables.add(name);
+              changed = true;
+            }
+          }
+        }
+
         const isTainted =
           isJsonSerializationTaintExpression(valueText, taintedVariables) ||
           isUserControlledUrlExpression(valueText, taintedVariables);
@@ -1616,6 +1826,15 @@ function collectSsrfDataflow(tree, sourceCode, trustedValidators) {
         }
 
         const rightText = textFromNode(sourceCode, rightNode);
+        if (/\[[\s\S]+\]/.test(rightText) && isUserControlledUrlExpression(rightText, taintedVariables)) {
+          for (const name of collectPatternIdentifiers(leftNode, sourceCode)) {
+            if (!dynamicCallableVariables.has(name)) {
+              dynamicCallableVariables.add(name);
+              changed = true;
+            }
+          }
+        }
+
         if (
           isJsonSerializationTaintExpression(rightText, taintedVariables) ||
           isUserControlledUrlExpression(rightText, taintedVariables)
@@ -1632,6 +1851,62 @@ function collectSsrfDataflow(tree, sourceCode, trustedValidators) {
       if (node.type === "call_expression") {
         const callText = textFromNode(sourceCode, node);
         const calleeText = callExpressionCalleeText(sourceCode, node);
+        const argsNode = childForField(node, "arguments");
+        const rootCallee = rootIdentifierFromCallee(calleeText);
+
+        if (/\[[\s\S]+\]/.test(calleeText) && isUserControlledUrlExpression(calleeText, taintedVariables)) {
+          addHardStop({
+            node,
+            reason: "dynamic-dispatch",
+            evidence: "tainted dynamic dispatch"
+          });
+          return;
+        }
+
+        if (rootCallee && dynamicCallableVariables.has(rootCallee)) {
+          addHardStop({
+            node,
+            reason: "dynamic-dispatch",
+            evidence: `tainted dynamic dispatch via ${rootCallee}`
+          });
+          return;
+        }
+
+        if (
+          !isKnownImmutableTaintApi(calleeText) &&
+          !isOutboundHttpPrimitive(calleeText) &&
+          !isTrustedSafeUrlValidatorCallee(calleeText, trustedValidators) &&
+          argsNode
+        ) {
+          const taintedArguments = [];
+          for (let index = 0; index < argsNode.namedChildCount; index += 1) {
+            const argumentText = textFromNode(sourceCode, argsNode.namedChild(index));
+            if (isUserControlledUrlExpression(argumentText, taintedVariables)) {
+              taintedArguments.push(argumentText);
+            }
+          }
+
+          if (taintedArguments.length > 0) {
+            if (isImportedCallee(calleeText, importedCallTargets)) {
+              addHardStop({
+                node,
+                reason: "inter-procedural-boundary",
+                evidence: `tainted value passed into imported function ${calleeText}`
+              });
+              return;
+            }
+
+            if (!isKnownNonMutatingFrameworkCallee(calleeText)) {
+              addHardStop({
+                node,
+                reason: "complex-aliasing",
+                evidence: `tainted object passed into unknown function ${calleeText}`
+              });
+              return;
+            }
+          }
+        }
+
         if (!isTrustedSafeUrlValidatorCallee(calleeText, trustedValidators)) {
           return;
         }
@@ -1646,7 +1921,7 @@ function collectSsrfDataflow(tree, sourceCode, trustedValidators) {
     });
   }
 
-  return { taintedVariables, validatedVariables };
+  return { taintedVariables, validatedVariables, hardStops };
 }
 
 function firstArgumentNode(callNode) {
@@ -1685,13 +1960,39 @@ function isValidatedUrlExpression(argumentText, validatedVariables = new Set(), 
   );
 }
 
+function ambiguousAstFinding({ filePath, sourceCode, hardStop }) {
+  return finding({
+    ruleId: "ambiguous-ast",
+    severity: "warning",
+    state: "AMBIGUOUS",
+    filePath,
+    line: lineFromStringIndex(sourceCode, hardStop.node.startIndex),
+    message: "Local AST proof surrendered at an unsafe semantic boundary.",
+    evidence: hardStop.evidence,
+    ambiguityReason: hardStop.reason,
+    deployedConsequence: "PreFlight cannot deterministically prove whether this path is sanitized or vulnerable without semantic cross-boundary analysis.",
+    actionRequired: "Route this file through the MicroRouter/Reasoning Engine or manually verify the boundary before committing.",
+    requiresDeepRemediation: true
+  });
+}
+
 function scanSsrfFindings({ filePath, relativePath, sourceCode, tree }) {
   if (!isSourceFile(filePath) || !isBackendSsrfScanTarget(relativePath, sourceCode)) {
     return [];
   }
 
   const trustedValidators = collectTrustedUrlValidators(tree, sourceCode);
-  const { taintedVariables, validatedVariables } = collectSsrfDataflow(tree, sourceCode, trustedValidators);
+  const importedCallTargets = collectImportedCallTargets(tree, sourceCode);
+  const { taintedVariables, validatedVariables, hardStops } = collectSsrfDataflow(
+    tree,
+    sourceCode,
+    trustedValidators,
+    importedCallTargets
+  );
+  if (hardStops.length > 0) {
+    return dedupeFindings(hardStops.map((hardStop) => ambiguousAstFinding({ filePath, sourceCode, hardStop })));
+  }
+
   const findings = [];
   walkTree(tree.rootNode, (node) => {
     if (node.type !== "call_expression") {
@@ -2643,6 +2944,188 @@ async function scanProject(rootDir = process.cwd(), options = {}) {
   });
 }
 
+function isAmbiguousAstFinding(finding) {
+  return finding?.ruleId === "ambiguous-ast" || finding?.state === "AMBIGUOUS";
+}
+
+function buildAmbiguousReasoningDiff(ambiguousFindings, rootDir = process.cwd()) {
+  return ambiguousFindings
+    .map((item) => {
+      const relativePath = toPosix(path.relative(path.resolve(rootDir), item.filePath));
+      return [
+        `diff --git a/${relativePath} b/${relativePath}`,
+        `+++ b/${relativePath}`,
+        `+// PREFLIGHT_AST_STATE=AMBIGUOUS line=${item.line || 1} reason=${item.ambiguityReason || "unknown"}`,
+        `+// ${item.evidence || "Local AST proof surrendered."}`
+      ].join("\n");
+    })
+    .join("\n");
+}
+
+function extractLocalImportPathsForReasoning(sourceCode) {
+  const importSources = new Set();
+  const patterns = [
+    /\bimport\s+(?:[\s\S]*?\s+from\s+)?['"](.+?)['"]/g,
+    /\brequire\s*\(\s*['"](.+?)['"]\s*\)/g
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(sourceCode)) !== null) {
+      if (match[1]?.startsWith(".")) {
+        importSources.add(match[1]);
+      }
+    }
+  }
+
+  return [...importSources];
+}
+
+async function collectAmbiguousReasoningFiles(ambiguousFindings, rootDir = process.cwd()) {
+  const resolvedRoot = path.resolve(rootDir);
+  const filePaths = new Set(ambiguousFindings.map((item) => path.resolve(item.filePath)));
+
+  for (const filePath of [...filePaths]) {
+    let sourceCode;
+    try {
+      sourceCode = await fs.readFile(filePath, "utf8");
+    } catch {
+      continue;
+    }
+
+    for (const importSource of extractLocalImportPathsForReasoning(sourceCode)) {
+      const importedPath = resolveImportPath(filePath, importSource);
+      if (importedPath && path.resolve(importedPath).startsWith(resolvedRoot)) {
+        filePaths.add(path.resolve(importedPath));
+      }
+    }
+  }
+
+  const files = [];
+  for (const filePath of [...filePaths].sort()) {
+    try {
+      files.push({
+        filePath: toPosix(path.relative(resolvedRoot, filePath)),
+        content: await fs.readFile(filePath, "utf8")
+      });
+    } catch {
+      // Ignore files that disappeared between scan and routing.
+    }
+  }
+
+  return files;
+}
+
+async function routeAmbiguousFindingsToReasoning(findings, options = {}) {
+  const ambiguousFindings = (Array.isArray(findings) ? findings : []).filter(isAmbiguousAstFinding);
+  if (ambiguousFindings.length === 0) {
+    return {
+      routed: "local",
+      ambiguous: false,
+      patchSet: null
+    };
+  }
+
+  const rootDir = path.resolve(options.rootDir || process.cwd());
+  const routeDeepRemediation = options.routeDeepRemediation || routeDeepRemediationDefault;
+
+  return routeDeepRemediation({
+    diff: buildAmbiguousReasoningDiff(ambiguousFindings, rootDir),
+    files: await collectAmbiguousReasoningFiles(ambiguousFindings, rootDir),
+    microRouter: options.microRouter || {
+      evaluate: async () => ({ requires_deep_scan: true, routed: "ambiguous-ast" })
+    },
+    ...(options.reasoningEngine ? { reasoningEngine: options.reasoningEngine } : {}),
+    ...(options.reasoningOptions ? { reasoningOptions: options.reasoningOptions } : {})
+  });
+}
+
+function normalizeReasoningVerdictState(state) {
+  const value = String(state || "").toUpperCase();
+  if (value === "GREEN") {
+    return "SAFE";
+  }
+  if (value === "RED") {
+    return "VULNERABLE";
+  }
+  if (value === "YELLOW") {
+    return "AMBIGUOUS";
+  }
+  return value;
+}
+
+function reasoningResultToFindings(reasoningResult, ambiguousFindings, rootDir = process.cwd()) {
+  const firstAmbiguous = ambiguousFindings[0];
+  const filePath = firstAmbiguous?.filePath || path.resolve(rootDir);
+  const line = firstAmbiguous?.line || 1;
+
+  if (reasoningResult?.patchSet) {
+    const patchCount = Array.isArray(reasoningResult.patchSet.patches) ? reasoningResult.patchSet.patches.length : 0;
+    return [
+      finding({
+        ruleId: "llm-reasoning",
+        severity: "critical",
+        state: "PATCH",
+        filePath,
+        line,
+        message: reasoningResult.patchSet.explanation || "Reasoning Engine proposed a patch set for ambiguous AST findings.",
+        evidence: `Reasoning Engine proposed ${patchCount} patch${patchCount === 1 ? "" : "es"}.`,
+        requiresDeepRemediation: true,
+        patchSet: reasoningResult.patchSet
+      })
+    ];
+  }
+
+  const verdict = reasoningResult?.verdict || reasoningResult?.microDecision?.verdict || null;
+  if (!verdict) {
+    return ambiguousFindings;
+  }
+
+  const state = normalizeReasoningVerdictState(verdict.state);
+  if (state === "SAFE") {
+    return [];
+  }
+
+  return [
+    finding({
+      ruleId: "llm-reasoning",
+      severity: state === "VULNERABLE" ? "critical" : "warning",
+      state,
+      filePath,
+      line,
+      message: verdict.reasoning || "Reasoning Engine returned a semantic verdict for ambiguous AST findings.",
+      evidence: verdict.auto_patch
+        ? "Reasoning Engine returned an auto-patch."
+        : verdict.manual_qa_line || `Reasoning Engine verdict: ${state}`,
+      requiresDeepRemediation: state !== "SAFE",
+      autoPatch: verdict.auto_patch || null,
+      manualQaLine: verdict.manual_qa_line || null
+    })
+  ];
+}
+
+function mergeReasoningFindings(findings, reasoningResult, rootDir = process.cwd()) {
+  const ambiguousFindings = findings.filter(isAmbiguousAstFinding);
+  if (ambiguousFindings.length === 0) {
+    return findings;
+  }
+
+  const nonAmbiguousFindings = findings.filter((item) => !isAmbiguousAstFinding(item));
+  return dedupeFindings([
+    ...nonAmbiguousFindings,
+    ...reasoningResultToFindings(reasoningResult, ambiguousFindings, rootDir)
+  ]);
+}
+
+function shouldRouteAmbiguousFindings(env = process.env) {
+  return Boolean(
+    env.PREFLIGHT_REASONING_API_KEY ||
+    env.PREFLIGHT_CLOUD_API_KEY ||
+    env.PREFLIGHT_LOCAL_LLM_URL ||
+    env.OPENROUTER_API_KEY
+  );
+}
+
 function askQuestion(question, options = {}) {
   const input = options.input || process.stdin;
   const output = options.output || process.stdout;
@@ -3380,12 +3863,40 @@ async function runCli(argv = process.argv, options = {}) {
   const startMcpServer = options.startMcpServer || startDefaultMcpServer;
   const verifyFixPermission = options.verifyFixPermission || verifyDefaultFixPermission;
   const reportTelemetry = options.reportTelemetry || reportTelemetryDefault;
+  const routeDeepRemediation = options.routeDeepRemediation || routeDeepRemediationDefault;
+  const resolveStoredLicenseKey = options.resolveStoredLicenseKey || resolveDefaultStoredLicenseKey;
+  const startCliLogin = options.startCliLogin || startDefaultCliLogin;
   const getRepositoryContextForTelemetry = options.getRepositoryContext;
   const program = new Command();
   program
     .name("preflight")
     .description("Local zero-knowledge scanner for Next.js and Supabase security flaws.")
     .version(packageJson.version, "-v, --version");
+
+  program
+    .command("login")
+    .description("Authorize the PreFlight CLI through the browser.")
+    .option("--dashboard-url <url>", "PreFlight dashboard URL", process.env.PREFLIGHT_DASHBOARD_URL || "https://preflight-vibe.vercel.app")
+    .option("--port <port>", "preferred localhost callback port", "4242")
+    .option("--no-open", "print the auth URL without opening a browser")
+    .action(async (loginOptions) => {
+      try {
+        process.stdout.write("Starting PreFlight browser login...\n");
+        const login = await startCliLogin({
+          dashboardUrl: loginOptions.dashboardUrl,
+          openBrowser: loginOptions.open === false ? async () => {} : undefined,
+          port: Number(loginOptions.port)
+        });
+        process.stdout.write(`Authorize this device in your browser: ${login.authUrl}\n`);
+        process.stdout.write(`Waiting for authorization on localhost:${login.port}...\n`);
+        await login.result;
+        process.stdout.write("PreFlight CLI login complete. License saved to ~/.preflight/config.json\n");
+        process.exitCode = 0;
+      } catch (error) {
+        process.stderr.write(`PreFlight login failed: ${error.message}\n`);
+        process.exitCode = 1;
+      }
+    });
 
   program
     .command("activate")
@@ -3540,13 +4051,14 @@ async function runCli(argv = process.argv, options = {}) {
           rootDir: process.cwd()
         });
       }
+      const licenseKey = await resolveStoredLicenseKey({ env: process.env });
       await waitForTelemetryFlush(reportTelemetry(
         result.findings || [],
         buildTelemetryRepositoryMetadata(process.cwd(), {
           getRepositoryContext: getRepositoryContextForTelemetry,
           env: process.env
         }),
-        process.env.PREFLIGHT_TEAMS_KEY || process.env.PREFLIGHT_PRO_KEY,
+        licenseKey || undefined,
         {
           ci: ciEnvironment.isCi,
           source: ciEnvironment.isCi ? "ci" : "cli"
@@ -3614,7 +4126,7 @@ async function runCli(argv = process.argv, options = {}) {
 
     const policy = await loadPreflightPolicy(process.cwd());
     const scanPolicy = isSingleFileScan && options.fix ? normalizePolicy() : policy;
-    const findings = options.diff
+    let findings = options.diff
       ? await scanProjectDiff(rootDir, { policy: scanPolicy })
       : isSingleFileScan
         ? await scanFiles(rootDir, [{
@@ -3622,6 +4134,28 @@ async function runCli(argv = process.argv, options = {}) {
           relativePath: toPosix(path.relative(rootDir, requestedPath))
         }], { policy: scanPolicy })
         : await scanProject(rootDir, { policy: scanPolicy });
+    if (
+      findings.some(isAmbiguousAstFinding) &&
+      (options.routeAmbiguous === true || shouldRouteAmbiguousFindings(process.env))
+    ) {
+      try {
+        const reasoningResult = await routeAmbiguousFindingsToReasoning(findings, {
+          rootDir,
+          routeDeepRemediation
+        });
+        findings = mergeReasoningFindings(findings, reasoningResult, rootDir);
+      } catch (error) {
+        if (isPaymentRequiredError(error)) {
+          process.stdout.write(`${PAYWALL_UPGRADE_MESSAGE}\n`);
+        } else if (isManualReviewRequiredError(error)) {
+          process.stdout.write(`${MANUAL_REVIEW_MESSAGE}\n`);
+        } else {
+          createLogger({ stderr: process.stderr }).warn(
+            `Warning: ambiguous AST routing failed closed: ${error.message}`
+          );
+        }
+      }
+    }
     let fixResult = null;
 
     if (options.fix) {
@@ -3657,13 +4191,14 @@ async function runCli(argv = process.argv, options = {}) {
       });
     }
 
+    const licenseKey = await resolveStoredLicenseKey({ env: process.env });
     await waitForTelemetryFlush(reportTelemetry(
       findings,
       buildTelemetryRepositoryMetadata(rootDir, {
         getRepositoryContext: getRepositoryContextForTelemetry,
         env: process.env
       }),
-      process.env.PREFLIGHT_TEAMS_KEY || process.env.PREFLIGHT_PRO_KEY,
+      licenseKey || undefined,
       {
         ci: ciEnvironment.isCi,
         source: ciEnvironment.isCi ? "ci" : "cli"
@@ -3720,6 +4255,7 @@ module.exports = {
   applyAstCredentialRemediation,
   renderReport,
   renderAuditReport,
+  routeAmbiguousFindingsToReasoning,
   renderSarif,
   runCli,
   savePreflightConfig,

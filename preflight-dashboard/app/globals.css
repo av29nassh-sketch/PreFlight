@@ -1,0 +1,42 @@
+@import "tailwindcss";
+@source "./app/**/*.{js,ts,jsx,tsx}";
+@source "./components/**/*.{js,ts,jsx,tsx}";
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: #09090b;
+}
+
+.technical-grid {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+  background-size: 60px 60px;
+  mask-image: radial-gradient(circle at 50% 18%, black 0%, black 44%, transparent 78%);
+}
+
+.technical-grid::before {
+  animation: grid-drift 18s linear infinite;
+  background: inherit;
+  content: "";
+  inset: -60px;
+  opacity: 0.8;
+  position: absolute;
+  transform: translate3d(0, 0, 0);
+}
+
+@keyframes grid-drift {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+
+  to {
+    transform: translate3d(60px, 60px, 0);
+  }
+}

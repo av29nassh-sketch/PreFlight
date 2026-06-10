@@ -370,6 +370,29 @@ describe("PreFlight core modular architecture", () => {
     });
   });
 
+  test("reasoning engine refuses Claude Sonnet without an OpenAI-compatible gateway URL", () => {
+    const { resolveReasoningEngineProvider } = require("../src/router/cloud");
+
+    expect(() => resolveReasoningEngineProvider({
+      PREFLIGHT_REASONING_API_KEY: "reasoning-key"
+    })).toThrow("Claude reasoning models require PREFLIGHT_REASONING_BASE_URL");
+  });
+
+  test("reasoning engine routes Claude Sonnet through a configured gateway URL", () => {
+    const { resolveReasoningEngineProvider } = require("../src/router/cloud");
+
+    expect(resolveReasoningEngineProvider({
+      PREFLIGHT_REASONING_API_KEY: "reasoning-key",
+      PREFLIGHT_REASONING_BASE_URL: "https://openrouter.ai/api/v1"
+    })).toEqual({
+      apiKey: "reasoning-key",
+      baseURL: "https://openrouter.ai/api/v1",
+      model: "claude-3-5-sonnet-20241022",
+      provider: "reasoning-cloud",
+      timeoutMs: 30000
+    });
+  });
+
   test("micro-router sends a compact diff payload and parses strict boolean JSON", async () => {
     const {
       MICRO_ROUTER_SYSTEM_PROMPT,
@@ -596,6 +619,79 @@ describe("PreFlight core modular architecture", () => {
     expect(requests[0].request.messages[1].content).toContain("middleware.ts");
     expect(requests[0].request.response_format).toEqual({ type: "json_object" });
     expect(requests[0].requestOptions).toEqual({ timeout: 12345 });
+  });
+
+  test("ReasoningEngine converts backend 402 responses into a paywall interceptor error", async () => {
+    const {
+      PreFlightPaymentRequiredError,
+      PAYWALL_UPGRADE_MESSAGE,
+      ReasoningEngine
+    } = require("../src/router/cloud");
+    const engine = new ReasoningEngine({
+      client: {
+        chat: {
+          completions: {
+            create: async () => {
+              const error = new Error("Payment Required");
+              error.status = 402;
+              throw error;
+            }
+          }
+        }
+      },
+      env: {},
+      model: "reasoning-test"
+    });
+
+    await expect(engine.generatePatchSet({
+      diff: "+export async function GET() { return Response.json({ ok: true }); }\n",
+      files: []
+    })).rejects.toBeInstanceOf(PreFlightPaymentRequiredError);
+    await expect(engine.generatePatchSet({
+      diff: "+export async function GET() { return Response.json({ ok: true }); }\n",
+      files: []
+    })).rejects.toMatchObject({
+      status: 402,
+      message: PAYWALL_UPGRADE_MESSAGE
+    });
+  });
+
+  test("ReasoningEngine refuses to parse MANUAL_REVIEW_REQUIRED as an auto patch", async () => {
+    const {
+      ManualReviewRequiredError,
+      MANUAL_REVIEW_MESSAGE,
+      ReasoningEngine
+    } = require("../src/router/cloud");
+    const engine = new ReasoningEngine({
+      client: {
+        chat: {
+          completions: {
+            create: async () => ({
+              choices: [
+                {
+                  message: {
+                    content: "  MANUAL_REVIEW_REQUIRED  "
+                  }
+                }
+              ]
+            })
+          }
+        }
+      },
+      env: {},
+      model: "reasoning-test"
+    });
+
+    await expect(engine.generatePatchSet({
+      diff: "+export async function GET() { return Response.json({ ok: true }); }\n",
+      files: []
+    })).rejects.toBeInstanceOf(ManualReviewRequiredError);
+    await expect(engine.generatePatchSet({
+      diff: "+export async function GET() { return Response.json({ ok: true }); }\n",
+      files: []
+    })).rejects.toMatchObject({
+      message: MANUAL_REVIEW_MESSAGE
+    });
   });
 
   test("deep remediation routing stops after micro-router says no deep scan is needed", async () => {

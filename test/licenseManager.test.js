@@ -139,6 +139,20 @@ describe("licenseManager", () => {
     });
   });
 
+  test("resolves CI environment licenses before the local browser login config", async () => {
+    const { resolveStoredLicenseKey, writeConfig } = require("../src/licensing/licenseManager");
+    const homeDir = makeHome();
+    await writeConfig({ freeFixesUsed: 0, licenseKey: "local-license-key", instanceId: null }, { homeDir });
+
+    await expect(resolveStoredLicenseKey({
+      homeDir,
+      env: {
+        PREFLIGHT_PRO_KEY: "ci-license-key"
+      }
+    })).resolves.toBe("ci-license-key");
+    await expect(resolveStoredLicenseKey({ homeDir, env: {} })).resolves.toBe("local-license-key");
+  });
+
   test("activates a Lemon Squeezy license and saves its instance when purchase email matches", async () => {
     const { activateLicenseKey, readConfig } = require("../src/licensing/licenseManager");
     const homeDir = makeHome();

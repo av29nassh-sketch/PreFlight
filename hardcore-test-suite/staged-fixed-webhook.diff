@@ -1,0 +1,17 @@
+diff --git a/app/api/webhooks/stripe/fixed.webhook.ts b/app/api/webhooks/stripe/fixed.webhook.ts
+new file mode 100644
+index 0000000..4444444
+--- /dev/null
++++ b/app/api/webhooks/stripe/fixed.webhook.ts
+@@ -0,0 +1,11 @@
++import Stripe from "stripe";
++const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
++export async function POST(req: Request) {
++  const body = await req.text();
++  const event = stripe.webhooks.constructEvent(body, "sig", process.env.STRIPE_WEBHOOK_SECRET!);
++  await markEventProcessedOnce(event.id);
++  return Response.json({ received: true });
++}
++async function markEventProcessedOnce(eventId: string) {
++  return eventId;
++}

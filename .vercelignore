@@ -1,0 +1,69 @@
+# Dependencies and package manager caches
+node_modules/
+**/node_modules/
+
+# Framework build output and local caches
+.next/
+**/.next/
+out/
+**/out/
+.turbo/
+**/.turbo/
+coverage/
+**/coverage/
+
+# Vercel local metadata/cache should not be uploaded
+.vercel/
+**/.vercel/
+
+# Local environment files and backups
+.env
+.env.*
+*.env
+*.env.*
+*.local
+*.bak
+*.backup
+
+# CLI release binaries and packaged artifacts
+dist/
+*.exe
+*.dmg
+*.pkg
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# Local demo/test sandboxes
+demo-sandbox/
+test-sandbox/
+hardcore-test-suite/
+
+# Logs, traces, and reports
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+test-results/
+playwright-report/
+temporary screenshots/
+*.heapsnapshot
+*.trace
+*.trace.json
+*.trace.json.gz
+
+# Heavy local media/design artifacts
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.gif
+*.psd
+*.ai
+*.sketch
+preflight-dashboard/*.png

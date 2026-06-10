@@ -6,6 +6,7 @@ const { evaluateHardware } = require("./hardware");
 
 const DEFAULT_CLOUD_ENDPOINT = "https://api.preflight.dev/v1/scan";
 const DEFAULT_CLOUD_MODEL = "gpt-4o-mini";
+const DEFAULT_REASONING_MODEL = "claude-3-5-sonnet-20241022";
 const DEFAULT_LOCAL_LLM_BASE_URL = "http://localhost:11434/v1";
 const DEFAULT_LOCAL_MICRO_MODEL = "qwen2.5-coder:0.5b";
 const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -15,6 +16,31 @@ const DEFAULT_MICRO_ROUTER_DIFF_BYTES = 12000;
 const DEFAULT_REASONING_TIMEOUT_MS = 30000;
 const DEFAULT_REASONING_CONTEXT_BYTES = 60000;
 const OpenAI = OpenAIImport.default || OpenAIImport;
+const MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED";
+const PAYWALL_UPGRADE_MESSAGE = [
+  "💡 You've hit the local trial limit!",
+  "PreFlight fixed 5 complex vulnerabilities for free. To unlock unlimited deep-logic AI remediation, upgrade to the Pro tier:",
+  "👉 https://your-dashboard-subdomain.vercel.app"
+].join("\n");
+const MANUAL_REVIEW_MESSAGE =
+  "⚠️ Manual Review Recommended: This vulnerability requires specific architectural context to fix safely. PreFlight has skipped auto-remediation to protect your build logic.";
+
+class PreFlightPaymentRequiredError extends Error {
+  constructor(message = PAYWALL_UPGRADE_MESSAGE) {
+    super(message);
+    this.name = "PreFlightPaymentRequiredError";
+    this.status = 402;
+    this.code = "PREFLIGHT_PAYMENT_REQUIRED";
+  }
+}
+
+class ManualReviewRequiredError extends Error {
+  constructor(message = MANUAL_REVIEW_MESSAGE) {
+    super(message);
+    this.name = "ManualReviewRequiredError";
+    this.code = "PREFLIGHT_MANUAL_REVIEW_REQUIRED";
+  }
+}
 
 const PREFLIGHT_SYSTEM_PROMPT = `
 You are PreFlight, a zero-tolerance AI security guardrail operating inside a developer's local pre-commit hook.
@@ -207,6 +233,32 @@ function extractCloudMessageText(response) {
   return text.trim();
 }
 
+function statusCodeFromError(error) {
+  const status = error?.status ?? error?.response?.status ?? error?.code;
+  const numericStatus = Number(status);
+  return Number.isFinite(numericStatus) ? numericStatus : null;
+}
+
+function isPaymentRequiredError(error) {
+  return error instanceof PreFlightPaymentRequiredError || statusCodeFromError(error) === 402;
+}
+
+function isManualReviewRequiredError(error) {
+  return error instanceof ManualReviewRequiredError || error?.code === "PREFLIGHT_MANUAL_REVIEW_REQUIRED";
+}
+
+function stripMarkdownFenceText(value) {
+  const text = String(value || "").trim();
+  const fenced = text.match(/^```[A-Za-z0-9_-]*\s*\r?\n([\s\S]*?)\r?\n```$/);
+  return (fenced ? fenced[1] : text).trim();
+}
+
+function assertCloudPayloadCanAutoApply(value) {
+  if (stripMarkdownFenceText(value) === MANUAL_REVIEW_REQUIRED) {
+    throw new ManualReviewRequiredError();
+  }
+}
+
 function parseJsonObject(text) {
   try {
     const parsed = JSON.parse(text);
@@ -342,18 +394,30 @@ function createMicroRouterClient(provider, options = {}) {
   });
 }
 
+function isClaudeModel(model) {
+  return /\bclaude-/i.test(String(model || ""));
+}
+
+function assertClaudeGatewayConfigured(provider) {
+  if (isClaudeModel(provider.model) && !provider.baseURL) {
+    throw new Error("Claude reasoning models require PREFLIGHT_REASONING_BASE_URL or PREFLIGHT_CLOUD_BASE_URL when using the OpenAI-compatible client.");
+  }
+}
+
 function resolveReasoningEngineProvider(env = process.env, options = {}) {
   const timeoutMs = Number(options.timeoutMs || env.PREFLIGHT_REASONING_TIMEOUT_MS);
   const resolvedTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_REASONING_TIMEOUT_MS;
 
   if (options.apiKey || env.PREFLIGHT_REASONING_API_KEY || env.PREFLIGHT_CLOUD_API_KEY || env.OPENAI_API_KEY) {
-    return {
+    const provider = {
       apiKey: options.apiKey || env.PREFLIGHT_REASONING_API_KEY || env.PREFLIGHT_CLOUD_API_KEY || env.OPENAI_API_KEY,
       baseURL: options.baseURL || env.PREFLIGHT_REASONING_BASE_URL || env.PREFLIGHT_CLOUD_BASE_URL || undefined,
-      model: options.model || env.PREFLIGHT_REASONING_MODEL || env.PREFLIGHT_CLOUD_MODEL || DEFAULT_CLOUD_MODEL,
+      model: options.model || env.PREFLIGHT_REASONING_MODEL || env.PREFLIGHT_CLOUD_MODEL || DEFAULT_REASONING_MODEL,
       provider: "reasoning-cloud",
       timeoutMs: resolvedTimeout
     };
+    assertClaudeGatewayConfigured(provider);
+    return provider;
   }
 
   if (env.OPENROUTER_API_KEY) {
@@ -454,26 +518,37 @@ class ReasoningEngine {
     const prompt = buildReasoningContextPrompt(context, {
       maxContextBytes: options.maxContextBytes || this.maxContextBytes
     });
-    const response = await this.client.chat.completions.create(
-      {
-        model: options.model || this.provider.model,
-        messages: [
-          {
-            role: "system",
-            content: REASONING_ENGINE_SYSTEM_PROMPT
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0
-      },
-      { timeout: options.timeoutMs || this.provider.timeoutMs }
-    );
+    let response;
+    try {
+      response = await this.client.chat.completions.create(
+        {
+          model: options.model || this.provider.model,
+          messages: [
+            {
+              role: "system",
+              content: REASONING_ENGINE_SYSTEM_PROMPT
+            },
+            {
+              role: "user",
+              content: prompt
+            }
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0
+        },
+        { timeout: options.timeoutMs || this.provider.timeoutMs }
+      );
+    } catch (error) {
+      if (isPaymentRequiredError(error)) {
+        throw new PreFlightPaymentRequiredError();
+      }
 
-    return parseMultiFileRemediationJson(extractCloudMessageText(response));
+      throw error;
+    }
+
+    const text = extractCloudMessageText(response);
+    assertCloudPayloadCanAutoApply(text);
+    return parseMultiFileRemediationJson(text);
   }
 }
 
@@ -585,6 +660,7 @@ module.exports = {
   createReasoningEngineClient,
   DEFAULT_CLOUD_ENDPOINT,
   DEFAULT_CLOUD_MODEL,
+  DEFAULT_REASONING_MODEL,
   DEFAULT_LOCAL_LLM_BASE_URL,
   DEFAULT_LOCAL_MICRO_MODEL,
   DEFAULT_MICRO_ROUTER_DIFF_BYTES,
@@ -593,10 +669,18 @@ module.exports = {
   DEFAULT_OPENROUTER_MICRO_MODEL,
   DEFAULT_REASONING_CONTEXT_BYTES,
   DEFAULT_REASONING_TIMEOUT_MS,
+  assertCloudPayloadCanAutoApply,
+  isManualReviewRequiredError,
+  isPaymentRequiredError,
+  MANUAL_REVIEW_MESSAGE,
+  MANUAL_REVIEW_REQUIRED,
+  ManualReviewRequiredError,
   MicroRouter,
   MICRO_ROUTER_SYSTEM_PROMPT,
+  PAYWALL_UPGRADE_MESSAGE,
   prepareCloudFallback,
   PREFLIGHT_SYSTEM_PROMPT,
+  PreFlightPaymentRequiredError,
   ReasoningEngine,
   REASONING_ENGINE_SYSTEM_PROMPT,
   resolveReasoningEngineProvider,

@@ -39,8 +39,7 @@
     "README.md"
   ],
   "bin": {
-    "preflight": "index.js",
-    "preflight-guardian": "index.js"
+    "preflight-guardian": "./index.js"
   },
   "scripts": {
     "test": "vitest run --globals",

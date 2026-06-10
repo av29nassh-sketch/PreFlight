@@ -1,0 +1,15 @@
+diff --git a/app/api/webhooks/stripe/bad.webhook.ts b/app/api/webhooks/stripe/bad.webhook.ts
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/app/api/webhooks/stripe/bad.webhook.ts
+@@ -0,0 +1,9 @@
++import Stripe from "stripe";
++const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
++export async function POST(req: Request) {
++  const event = await req.json();
++  if (event.type === "checkout.session.completed") {
++    await fetch("https://internal.example/billing/sync");
++  }
++  return Response.json({ received: true });
++}

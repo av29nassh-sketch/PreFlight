@@ -306,4 +306,33 @@ describe("remediationEngine", () => {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
   });
+
+  test("applyMultiFilePatchSet refuses MANUAL_REVIEW_REQUIRED payloads before writing files", async () => {
+    const fs = require("node:fs");
+    const os = require("node:os");
+    const path = require("node:path");
+    const { applyMultiFilePatchSet, MANUAL_REVIEW_MESSAGE } = require("../remediationEngine");
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-manual-review-"));
+    const output = { text: "", write(chunk) { this.text += String(chunk); } };
+
+    try {
+      fs.writeFileSync(path.join(rootDir, "route.ts"), "before\n");
+      const result = await applyMultiFilePatchSet(" MANUAL_REVIEW_REQUIRED ", {
+        ask: async () => "y",
+        output,
+        rootDir
+      });
+
+      expect(result).toEqual({
+        attempted: 0,
+        applied: 0,
+        skipped: 0,
+        manualReviewRequired: true
+      });
+      expect(output.text).toContain(MANUAL_REVIEW_MESSAGE);
+      expect(fs.readFileSync(path.join(rootDir, "route.ts"), "utf8")).toBe("before\n");
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
 });
