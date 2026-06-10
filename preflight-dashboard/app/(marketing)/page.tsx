@@ -33,6 +33,7 @@ const pricing = [
     description: "Five cloud remediation credits for private beta testers and solo builders.",
     features: ["5 free trial credits", "Local AST scan", "Interactive fix prompts", "No source upload for local checks"],
     cta: "Use 5 free fixes",
+    href: "/dashboard",
     muted: true
   },
   {
@@ -41,7 +42,7 @@ const pricing = [
     description: "For founders and vibecoders shipping with Cursor, Claude, and Copilot.",
     features: ["Unlimited deep-logic remediation", "Claude 3.5 Sonnet patching", "CLI login", "Polar/Supabase/Next.js guardrails"],
     cta: "Start Solo remediation",
-    plan: "solo" as const,
+    href: `/signup?redirect_to=${encodeURIComponent("https://polar.sh/YOUR_ORG/products/preflight-solo")}`,
     featured: true
   },
   {
@@ -50,18 +51,9 @@ const pricing = [
     description: "For engineering teams enforcing AI-code safety across repos.",
     features: ["Everything in Solo", "Org repository enforcement", "Team telemetry dashboard", "CI and MCP governance"],
     cta: "Start team checkout",
-    plan: "teams" as const
+    href: `/signup?redirect_to=${encodeURIComponent("https://polar.sh/YOUR_ORG/products/preflight-teams")}`
   }
 ];
-
-const polarCheckoutLinks = {
-  solo: process.env.POLAR_SOLO_CHECKOUT_URL || "https://polar.sh/YOUR_ORG/products/preflight-solo",
-  teams: process.env.POLAR_TEAMS_CHECKOUT_URL || "https://polar.sh/YOUR_ORG/products/preflight-teams"
-};
-
-function buildAuthCheckoutUrl(checkoutUrl: string) {
-  return `/signup?redirect_to=${encodeURIComponent(checkoutUrl)}`;
-}
 
 function TerminalDemo() {
   return (
@@ -201,18 +193,16 @@ export default function MarketingPage() {
                   </li>
                 ))}
               </ul>
-              {"plan" in plan ? (
-                <a
-                  className="mt-7 inline-flex h-12 w-full items-center justify-center rounded-md bg-zinc-50 px-5 text-sm font-semibold text-zinc-950 hover:bg-emerald-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 active:translate-y-px disabled:cursor-wait disabled:opacity-70"
-                  href={buildAuthCheckoutUrl(polarCheckoutLinks[plan.plan])}
-                >
-                  {plan.cta}
-                </a>
-              ) : (
-                <a className="mt-7 inline-flex h-12 w-full items-center justify-center rounded-md border border-zinc-700 px-5 text-sm font-semibold text-zinc-100 hover:border-zinc-500 hover:bg-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 active:translate-y-px" href="/dashboard">
-                  {plan.cta}
-                </a>
-              )}
+              <a
+                className={
+                  plan.featured
+                    ? "mt-7 inline-flex h-12 w-full items-center justify-center rounded-md bg-zinc-50 px-5 text-sm font-semibold text-zinc-950 hover:bg-emerald-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 active:translate-y-px disabled:cursor-wait disabled:opacity-70"
+                    : "mt-7 inline-flex h-12 w-full items-center justify-center rounded-md border border-zinc-700 px-5 text-sm font-semibold text-zinc-100 hover:border-zinc-500 hover:bg-zinc-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 active:translate-y-px"
+                }
+                href={plan.href}
+              >
+                {plan.cta}
+              </a>
             </article>
           ))}
         </div>
