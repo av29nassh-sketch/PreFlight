@@ -85,7 +85,7 @@ describe("remediationEngine", () => {
       ],
       temperature: 0
     });
-    expect(logs[0]).toContain("[LLM] Fix completed. Tokens used: 18 (Prompt: 11, Completion: 7)");
+    expect(logs[0]).toContain("[PRO] Claude fix generated. Tokens used: 18 (Prompt: 11, Completion: 7)");
   });
 
   test("verifySyntaxSafety accepts parseable fragments and rejects ERROR nodes", async () => {
@@ -95,17 +95,18 @@ describe("remediationEngine", () => {
     await expect(verifySyntaxSafety("const query = ")).rejects.toThrow("Remediation Syntax Violation");
   });
 
-  test("generateParameterizedFix skips safely and explains free Gemini setup when no provider key exists", async () => {
-    const { generateParameterizedFix } = require("../remediationEngine");
+  test("generateParameterizedFix skips safely and requires a PreFlight Pro activation when no proxy key exists", async () => {
+    const {
+      ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE,
+      generateParameterizedFix
+    } = require("../remediationEngine");
     const previousEnv = {
-      GEMINI_API_KEY: process.env.GEMINI_API_KEY,
-      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
-      OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY
+      PREFLIGHT_PRO_KEY: process.env.PREFLIGHT_PRO_KEY,
+      PREFLIGHT_PRO_LICENSE_KEY: process.env.PREFLIGHT_PRO_LICENSE_KEY
     };
     const warnings = [];
-    delete process.env.GEMINI_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.PREFLIGHT_PRO_KEY;
+    delete process.env.PREFLIGHT_PRO_LICENSE_KEY;
 
     try {
       const rawSnippet = "\"SELECT * FROM users WHERE id = \" + userId";
@@ -114,7 +115,9 @@ describe("remediationEngine", () => {
       });
 
       expect(result).toBe(rawSnippet);
-      expect(warnings).toEqual([
+      expect(warnings).toEqual([ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE]);
+      if (false) {
+        expect(warnings).toEqual([
         [
           "=========================================",
           "💡 SQL Remediation is available for FREE!",
@@ -126,7 +129,8 @@ describe("remediationEngine", () => {
           "=========================================",
           "[SKIP] Skipping LLM SQL remediation for this run."
         ].join("\n")
-      ]);
+        ]);
+      }
     } finally {
       for (const [key, value] of Object.entries(previousEnv)) {
         if (value === undefined) {
@@ -138,8 +142,8 @@ describe("remediationEngine", () => {
     }
   });
 
-  test("generateParameterizedFix skips SQL remediation when the provider returns an API error", async () => {
-    const { generateParameterizedFix } = require("../remediationEngine");
+  test("generateParameterizedFix surfaces the unified Pro engine connection error when the provider request fails", async () => {
+    const { generateParameterizedFix, PRO_ENGINE_CONNECTION_ERROR } = require("../remediationEngine");
     const rawSnippet = "\"SELECT * FROM users WHERE id = \" + userId";
     const warnings = [];
     const providerFailures = [];
@@ -163,35 +167,101 @@ describe("remediationEngine", () => {
     });
 
     expect(result).toBe(rawSnippet);
-    expect(warnings[0]).toContain("[SKIP] SQL remediation provider failed");
-    expect(warnings[0]).toContain("404 Provider returned error");
+    expect(warnings[0]).toBe(PRO_ENGINE_CONNECTION_ERROR);
     expect(providerFailures).toHaveLength(1);
     expect(providerFailures[0].provider.model).toBe("test-model");
   });
 
-  test("resolveLlmProvider prefers Gemini, then OpenRouter, then OpenAI with MODEL_NAME override", () => {
+  test("generateParameterizedFix routes PreFlight Pro SQL remediation through the live proxy contract", async () => {
+    const { generateParameterizedFix, SURGICAL_LLM_SYSTEM_PROMPT } = require("../remediationEngine");
+    const requests = [];
+
+    const fix = await generateParameterizedFix("\"SELECT * FROM users WHERE id = \" + userId", {
+      licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
+      transport: async (request) => {
+        requests.push(request);
+        return {
+          content: [
+            {
+              text: "db.query(\"SELECT * FROM users WHERE id = $1\", [userId])"
+            }
+          ]
+        };
+      }
+    });
+
+    expect(fix).toBe("db.query(\"SELECT * FROM users WHERE id = $1\", [userId])");
+    expect(requests[0]).toMatchObject({
+      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediate",
+      headers: {
+        "Content-Type": "application/json",
+        "X-PreFlight-Pro-Key": "PREFLIGHT-BETA-20260610-TEST1"
+      },
+      payload: {
+        system: SURGICAL_LLM_SYSTEM_PROMPT,
+        max_tokens: 900,
+        messages: [
+          {
+            role: "user",
+            content: "\"SELECT * FROM users WHERE id = \" + userId"
+          }
+        ]
+      }
+    });
+  });
+
+  test("generateParameterizedFix extracts the code block when the proxy returns explanation text plus markdown", async () => {
+    const { generateParameterizedFix } = require("../remediationEngine");
+
+    const fix = await generateParameterizedFix("\"SELECT * FROM users WHERE id = \" + userId", {
+      licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
+      transport: async () => ({
+        content: [
+          {
+            text: [
+              "Root Cause: String-built SQL bypasses parameter binding.",
+              "```js",
+              "db.query(\"SELECT * FROM users WHERE id = $1\", [userId])",
+              "```"
+            ].join("\n")
+          }
+        ]
+      })
+    });
+
+    expect(fix).toBe("db.query(\"SELECT * FROM users WHERE id = $1\", [userId])");
+  });
+
+  test("generateParameterizedFix wraps bare SQL proxy output into a query config expression for inline replacement", async () => {
+    const { generateParameterizedFix } = require("../remediationEngine");
+
+    const fix = await generateParameterizedFix("\"SELECT * FROM users WHERE id = \" + userId", {
+      licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
+      transport: async () => ({
+        content: [
+          {
+            text: "SELECT * FROM users WHERE id = $1"
+          }
+        ]
+      })
+    });
+
+    expect(fix).toBe("({ text: \"SELECT * FROM users WHERE id = $1\", values: [userId] })");
+  });
+
+  test("resolveLlmProvider uses the PreFlight Pro proxy key instead of user-supplied AI keys", () => {
     const { resolveLlmProvider } = require("../remediationEngine");
 
     expect(resolveLlmProvider({
-      GEMINI_API_KEY: "gemini-key",
-      OPENROUTER_API_KEY: "openrouter-key",
-      OPENAI_API_KEY: "openai-key",
+      PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260610-TEST1",
       MODEL_NAME: "custom-model"
     })).toMatchObject({
-      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+      baseURL: "https://preflight-proxy.vercel.app/api/v1/remediate",
+      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediate",
       model: "custom-model",
-      provider: "gemini"
+      provider: "preflight-pro"
     });
-    expect(resolveLlmProvider({ OPENROUTER_API_KEY: "openrouter-key" })).toMatchObject({
-      baseURL: "https://openrouter.ai/api/v1",
-      model: "qwen/qwen3-coder:free",
-      provider: "openrouter"
-    });
-    expect(resolveLlmProvider({ OPENAI_API_KEY: "openai-key" })).toMatchObject({
-      baseURL: undefined,
-      model: "gpt-4o-mini",
-      provider: "openai"
-    });
+    expect(resolveLlmProvider({})).toBe(null);
   });
 
   test("parseMultiFileRemediationJson validates the strict deep remediation structure", () => {
@@ -331,6 +401,88 @@ describe("remediationEngine", () => {
       });
       expect(output.text).toContain(MANUAL_REVIEW_MESSAGE);
       expect(fs.readFileSync(path.join(rootDir, "route.ts"), "utf8")).toBe("before\n");
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test("applyMultiFilePatchSet aborts the whole transaction when a JS patch fails syntax validation", async () => {
+    const fs = require("node:fs");
+    const os = require("node:os");
+    const path = require("node:path");
+    const { applyMultiFilePatchSet, MANUAL_REVIEW_MESSAGE } = require("../remediationEngine");
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-deep-invalid-"));
+    const output = { text: "", write(chunk) { this.text += String(chunk); } };
+
+    try {
+      fs.mkdirSync(path.join(rootDir, "app/api/tenant"), { recursive: true });
+      fs.writeFileSync(path.join(rootDir, "app/api/tenant/route.ts"), "export async function GET() {}\n");
+      fs.writeFileSync(path.join(rootDir, "app/api/tenant/policy.ts"), "export const policy = 'before';\n");
+
+      const result = await applyMultiFilePatchSet({
+        patches: [
+          {
+            filePath: "app/api/tenant/route.ts",
+            action: "update",
+            newContent: "export const GET = (\n"
+          },
+          {
+            filePath: "app/api/tenant/policy.ts",
+            action: "update",
+            newContent: "export const policy = 'after';\n"
+          }
+        ],
+        explanation: "This invalid patch should never hit disk."
+      }, {
+        ask: async () => "y",
+        output,
+        rootDir
+      });
+
+      expect(result).toEqual({
+        attempted: 2,
+        applied: 0,
+        skipped: 0,
+        manualReviewRequired: true
+      });
+      expect(output.text).toContain(MANUAL_REVIEW_MESSAGE);
+      expect(fs.readFileSync(path.join(rootDir, "app/api/tenant/route.ts"), "utf8")).toBe("export async function GET() {}\n");
+      expect(fs.readFileSync(path.join(rootDir, "app/api/tenant/policy.ts"), "utf8")).toBe("export const policy = 'before';\n");
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test("applyMultiFilePatchSet accepts valid JSX patches without forcing manual review", async () => {
+    const fs = require("node:fs");
+    const os = require("node:os");
+    const path = require("node:path");
+    const { applyMultiFilePatchSet } = require("../remediationEngine");
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-deep-jsx-"));
+
+    try {
+      fs.mkdirSync(path.join(rootDir, "app"), { recursive: true });
+      fs.writeFileSync(path.join(rootDir, "app/page.jsx"), "export default function Page() { return null; }\n");
+
+      const result = await applyMultiFilePatchSet({
+        patches: [
+          {
+            filePath: "app/page.jsx",
+            action: "update",
+            newContent: "export default function Page() { return <main><h1>Safe</h1></main>; }\n"
+          }
+        ],
+        explanation: "Render a safe JSX page."
+      }, {
+        ask: async () => "y",
+        output: { write() {} },
+        rootDir
+      });
+
+      expect(result).toEqual({ attempted: 1, applied: 1, skipped: 0 });
+      expect(fs.readFileSync(path.join(rootDir, "app/page.jsx"), "utf8")).toBe(
+        "export default function Page() { return <main><h1>Safe</h1></main>; }\n"
+      );
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }

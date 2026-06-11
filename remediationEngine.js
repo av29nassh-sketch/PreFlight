@@ -3,6 +3,11 @@ const path = require("node:path");
 const readline = require("node:readline");
 const ParserBinding = require("web-tree-sitter");
 const OpenAIImport = require("openai");
+const {
+  DEFAULT_PREFLIGHT_PROXY_ENDPOINT,
+  extractPreflightProxyText,
+  requestPreflightProxy
+} = require("./src/proxy/client");
 
 const Parser = ParserBinding.Parser || ParserBinding.default?.Parser || ParserBinding.default || ParserBinding;
 const Language = ParserBinding.Language || ParserBinding.default?.Language;
@@ -10,13 +15,19 @@ const OpenAI = OpenAIImport.default || OpenAIImport;
 
 const SQL_KEYWORD_PATTERN = /\b(?:SELECT|INSERT|UPDATE|DELETE)\b/i;
 const SURGICAL_LLM_SYSTEM_PROMPT =
-  "You are a specialized code refactoring utility. Convert the provided insecure JavaScript/TypeScript string concatenation into a completely secure, parameterized query format using standard placeholder symbols ($1, $2, etc.). Return ONLY the executable, corrected code fragment. Do not output markdown code blocks, backticks, or text explanations.";
+  "You are a specialized code refactoring utility. Convert the provided insecure JavaScript/TypeScript string concatenation into a completely secure, parameterized query format using standard placeholder symbols ($1, $2, etc.). Return ONLY the executable, corrected code fragment. Do not output markdown code blocks, backticks, or text explanations. CRITICAL: Minimize internal reasoning steps. Generate the target payload immediately. Do not append conversational preambles or post-analysis text.";
 const DEFAULT_GEMINI_MODEL = "gemini-1.5-flash";
+const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
 const DEFAULT_OPENROUTER_MODEL = "qwen/qwen3-coder:free";
+const DEFAULT_PREFLIGHT_PROXY_BASE_URL = DEFAULT_PREFLIGHT_PROXY_ENDPOINT;
 const DEFAULT_LLM_TIMEOUT_MS = 15000;
-const GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const DEFAULT_LLM_MAX_TOKENS = 900;
+const TREE_SITTER_WASM_PATHS = {
+  javascript: path.join(__dirname, "wasm", "tree-sitter-javascript.wasm"),
+  typescript: path.join(__dirname, "wasm", "tree-sitter-typescript.wasm"),
+  tsx: path.join(__dirname, "wasm", "tree-sitter-tsx.wasm")
+};
 const MANUAL_REVIEW_REQUIRED = "MANUAL_REVIEW_REQUIRED";
 const MANUAL_REVIEW_MESSAGE =
   "⚠️ Manual Review Recommended: This vulnerability requires specific architectural context to fix safely. PreFlight has skipped auto-remediation to protect your build logic.";
@@ -31,25 +42,21 @@ const FREE_SQL_REMEDIATION_MESSAGE = [
   "=========================================",
   "[SKIP] Skipping LLM SQL remediation for this run."
 ].join("\n");
+const ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE =
+  "Advanced remediation requires a valid PreFlight Pro activation.";
+const PRO_ENGINE_CONNECTION_ERROR =
+  "🔴 PreFlight Pro Engine connection timed out or license invalid. Please verify your PREFLIGHT_PRO_KEY.";
 
 function formatProviderFailureMessage(error, provider) {
-  const status = error?.status || error?.code || "unknown";
-  const detail = error?.message || "Provider request failed";
-  const providerLabel = provider?.provider || "custom";
-  const modelLabel = provider?.model || "unknown-model";
-  return [
-    "=========================================",
-    "[SKIP] SQL remediation provider failed.",
-    `Provider: ${providerLabel}`,
-    `Model: ${modelLabel}`,
-    `Error: ${status} ${detail}`,
-    "Local scan will continue without applying the SQL auto-fix.",
-    "========================================="
-  ].join("\n");
+  if (!provider) {
+    return ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE;
+  }
+
+  return PRO_ENGINE_CONNECTION_ERROR;
 }
 
 let parserReady;
-let javascriptLanguage;
+let syntaxLanguages;
 
 async function initializeParser() {
   if (!parserReady) {
@@ -60,16 +67,43 @@ async function initializeParser() {
     await parserReady;
   }
 
-  if (!javascriptLanguage) {
-    const wasmPath = require.resolve("tree-sitter-javascript/tree-sitter-javascript.wasm");
-    javascriptLanguage = await Language.load(wasmPath);
+  if (!syntaxLanguages) {
+    syntaxLanguages = {
+      javascript: await Language.load(TREE_SITTER_WASM_PATHS.javascript),
+      typescript: await Language.load(TREE_SITTER_WASM_PATHS.typescript),
+      tsx: await Language.load(TREE_SITTER_WASM_PATHS.tsx)
+    };
   }
 }
 
 async function parseJavaScript(sourceCode) {
   await initializeParser();
   const parser = new Parser();
-  parser.setLanguage(javascriptLanguage);
+  parser.setLanguage(syntaxLanguages.javascript);
+  return parser.parse(sourceCode);
+}
+
+function getSyntaxLanguageKeyForFile(filePath) {
+  const extension = path.extname(filePath || "").toLowerCase();
+  if (extension === ".tsx" || extension === ".jsx") {
+    return "tsx";
+  }
+
+  if (extension === ".ts" || extension === ".mts" || extension === ".cts") {
+    return "typescript";
+  }
+
+  return "javascript";
+}
+
+function shouldSyntaxValidatePatch(filePath) {
+  return /\.(?:[cm]?[jt]sx?)$/i.test(filePath || "");
+}
+
+async function parseSourceForValidation(sourceCode, filePath) {
+  await initializeParser();
+  const parser = new Parser();
+  parser.setLanguage(syntaxLanguages[getSyntaxLanguageKeyForFile(filePath)]);
   return parser.parse(sourceCode);
 }
 
@@ -167,33 +201,29 @@ async function verifySyntaxSafety(proposedFix) {
   return true;
 }
 
+async function verifyPatchedSourceSyntax(filePath, proposedSource) {
+  const tree = await parseSourceForValidation(proposedSource, filePath);
+  try {
+    if (treeContainsUnsafeNode(tree.rootNode)) {
+      throw new Error("Remediation Syntax Violation");
+    }
+  } finally {
+    tree.delete?.();
+  }
+
+  return true;
+}
+
 function resolveLlmProvider(env = process.env, options = {}) {
   const modelOverride = options.model || env.MODEL_NAME;
-
-  if (env.GEMINI_API_KEY) {
+  const proKey = options.licenseKey || env.PREFLIGHT_PRO_KEY || env.PREFLIGHT_PRO_LICENSE_KEY;
+  if (proKey) {
     return {
-      apiKey: env.GEMINI_API_KEY,
-      baseURL: GEMINI_OPENAI_BASE_URL,
-      model: modelOverride || DEFAULT_GEMINI_MODEL,
-      provider: "gemini"
-    };
-  }
-
-  if (env.OPENROUTER_API_KEY) {
-    return {
-      apiKey: env.OPENROUTER_API_KEY,
-      baseURL: OPENROUTER_BASE_URL,
-      model: modelOverride || DEFAULT_OPENROUTER_MODEL,
-      provider: "openrouter"
-    };
-  }
-
-  if (env.OPENAI_API_KEY) {
-    return {
-      apiKey: env.OPENAI_API_KEY,
-      baseURL: undefined,
-      model: modelOverride || DEFAULT_OPENAI_MODEL,
-      provider: "openai"
+      apiKey: proKey,
+      baseURL: options.baseURL || options.endpoint || env.PREFLIGHT_PRO_PROXY_BASE_URL || env.PREFLIGHT_CLOUD_BASE_URL || DEFAULT_PREFLIGHT_PROXY_BASE_URL,
+      endpoint: options.endpoint || options.baseURL || env.PREFLIGHT_PRO_PROXY_BASE_URL || env.PREFLIGHT_CLOUD_BASE_URL || DEFAULT_PREFLIGHT_PROXY_BASE_URL,
+      model: modelOverride || DEFAULT_ANTHROPIC_MODEL,
+      provider: "preflight-pro"
     };
   }
 
@@ -202,6 +232,106 @@ function resolveLlmProvider(env = process.env, options = {}) {
 
 function extractChatCompletionText(response) {
   return (response.choices?.[0]?.message?.content || "").trim();
+}
+
+function extractProxyCodeFragment(text) {
+  const normalized = String(text || "").trim();
+  const codeBlockMatch = normalized.match(/```(?:[A-Za-z0-9_-]+)?\r?\n([\s\S]*?)```/);
+  if (codeBlockMatch?.[1]?.trim()) {
+    return codeBlockMatch[1].trim();
+  }
+
+  const withoutRootCause = normalized.replace(/^Root Cause:\s*[^\r\n]*\r?\n?/i, "").trim();
+  const fencedOrPlain = stripMarkdownFenceText(withoutRootCause);
+  return fencedOrPlain.trim();
+}
+
+function extractStandaloneSqlText(proposedFix) {
+  const trimmed = String(proposedFix || "").trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const quotedMatch = trimmed.match(/^(['"`])([\s\S]*)\1$/);
+  if (quotedMatch && SQL_KEYWORD_PATTERN.test(quotedMatch[2])) {
+    return quotedMatch[2].trim().replace(/;+\s*$/, "");
+  }
+
+  if (/^(?:SELECT|INSERT|UPDATE|DELETE)\b/i.test(trimmed)) {
+    return trimmed.replace(/;+\s*$/, "");
+  }
+
+  return null;
+}
+
+function findExpressionNode(node) {
+  if (!node) {
+    return null;
+  }
+
+  if (node.type === "program" || node.type === "expression_statement") {
+    return findExpressionNode(node.namedChild(0));
+  }
+
+  return node;
+}
+
+function flattenConcatenationNodes(node, sourceCode, parts = []) {
+  if (!node) {
+    return parts;
+  }
+
+  if (node.type === "binary_expression" && getOperator(node, sourceCode) === "+") {
+    flattenConcatenationNodes(getFieldNode(node, "left"), sourceCode, parts);
+    flattenConcatenationNodes(getFieldNode(node, "right"), sourceCode, parts);
+    return parts;
+  }
+
+  parts.push(node);
+  return parts;
+}
+
+function isSqlLiteralSegment(node, sourceCode) {
+  const text = getNodeText(node, sourceCode).trim();
+  return /^['"`]/.test(text) || SQL_KEYWORD_PATTERN.test(text);
+}
+
+async function extractSqlBindingsFromSnippet(rawSnippet) {
+  const tree = await parseJavaScript(rawSnippet);
+  try {
+    const expressionNode = findExpressionNode(tree.rootNode);
+    const parts = flattenConcatenationNodes(expressionNode, rawSnippet);
+    const bindings = [];
+
+    for (const part of parts) {
+      if (!part || isSqlLiteralSegment(part, rawSnippet)) {
+        continue;
+      }
+
+      const text = getNodeText(part, rawSnippet).trim();
+      if (text && !bindings.includes(text)) {
+        bindings.push(text);
+      }
+    }
+
+    return bindings;
+  } finally {
+    tree.delete?.();
+  }
+}
+
+async function normalizeProxySqlFix(rawSnippet, proposedFix) {
+  const sqlText = extractStandaloneSqlText(proposedFix);
+  if (!sqlText) {
+    return String(proposedFix || "").trim();
+  }
+
+  const bindings = await extractSqlBindingsFromSnippet(rawSnippet);
+  if (bindings.length === 0) {
+    return JSON.stringify(sqlText);
+  }
+
+  return `({ text: ${JSON.stringify(sqlText)}, values: [${bindings.join(", ")}] })`;
 }
 
 function parseMultiFileRemediationJson(text) {
@@ -294,12 +424,49 @@ function resolveWorkspacePatchPath(rootDir, filePath) {
   return resolvedPath;
 }
 
+async function snapshotPatchTarget(targetPath) {
+  try {
+    return {
+      existed: true,
+      contents: await fs.readFile(targetPath, "utf8")
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return {
+        existed: false,
+        contents: null
+      };
+    }
+    throw error;
+  }
+}
+
+async function restorePatchTarget(targetPath, snapshot) {
+  if (!snapshot?.existed) {
+    await fs.rm(targetPath, { force: true });
+    return;
+  }
+
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, snapshot.contents, "utf8");
+}
+
+async function validatePatchSetBeforeWrite(normalizedPatchSet) {
+  for (const patch of normalizedPatchSet.patches) {
+    if (patch.action === "delete" || !shouldSyntaxValidatePatch(patch.filePath)) {
+      continue;
+    }
+
+    await verifyPatchedSourceSyntax(patch.filePath, patch.newContent);
+  }
+}
+
 function logTokenUsage(response, log) {
   const usage = response.usage || {};
   const promptTokens = usage.prompt_tokens || 0;
   const completionTokens = usage.completion_tokens || 0;
   const totalTokens = usage.total_tokens || promptTokens + completionTokens;
-  log(`\u001b[36m[LLM] Fix completed. Tokens used: ${totalTokens} (Prompt: ${promptTokens}, Completion: ${completionTokens})\u001b[0m`);
+  log(`\u001b[36m[PRO] Claude fix generated. Tokens used: ${totalTokens} (Prompt: ${promptTokens}, Completion: ${completionTokens})\u001b[0m`);
 }
 
 async function askDeepPatchQuestion(question, options = {}) {
@@ -321,14 +488,29 @@ async function askDeepPatchQuestion(question, options = {}) {
 
 function renderMultiFilePatchPreview(patchSet) {
   const lines = [
+    "🚀 [PRO] Deep reasoning patch generated by Claude",
+    "",
     "Deep Multi-File Remediation",
     "",
     patchSet.explanation,
     "",
-    "Planned file modifications:",
-    ...patchSet.patches.map((patch) => `- ${patch.action.toUpperCase()} ${patch.filePath}`),
-    ""
+    "Planned file modifications:"
   ];
+
+  for (const patch of patchSet.patches) {
+    lines.push(`- ${patch.action.toUpperCase()} ${patch.filePath}`);
+    if (patch.action === "delete") {
+      lines.push("  [delete file]");
+      continue;
+    }
+
+    lines.push("  Proposed content:");
+    for (const line of patch.newContent.split(/\r?\n/)) {
+      lines.push(`  ${line}`);
+    }
+  }
+
+  lines.push("");
 
   return lines.join("\n");
 }
@@ -367,7 +549,7 @@ async function applyMultiFilePatchSet(patchSet, options = {}) {
     : parseMultiFileRemediationJson(patchSet);
   output.write(`${renderMultiFilePatchPreview(normalizedPatchSet)}\n`);
 
-  const answer = await askDeepPatchQuestion("[y/n] Apply entire multi-file architectural patch? ", options);
+  const answer = await askDeepPatchQuestion(options.question || "[y/n] Apply entire multi-file architectural patch? ", options);
   const attempted = normalizedPatchSet.patches.length;
   if (String(answer || "").trim().toLowerCase() !== "y") {
     output.write("Multi-file architectural patch declined. No files were changed.\n");
@@ -375,18 +557,52 @@ async function applyMultiFilePatchSet(patchSet, options = {}) {
   }
 
   const rootDir = path.resolve(options.rootDir || process.cwd());
-  let applied = 0;
+  try {
+    await validatePatchSetBeforeWrite(normalizedPatchSet);
+  } catch (error) {
+    output.write(`${MANUAL_REVIEW_MESSAGE}\n`);
+    output.write(`Deep patch validation failed before write: ${error.message}\n`);
+    return {
+      attempted,
+      applied: 0,
+      skipped: 0,
+      manualReviewRequired: true
+    };
+  }
+
+  const snapshots = new Map();
   for (const patch of normalizedPatchSet.patches) {
     const targetPath = resolveWorkspacePatchPath(rootDir, patch.filePath);
-    if (patch.action === "delete") {
-      await fs.rm(targetPath, { force: true });
-      applied += 1;
-      continue;
-    }
+    snapshots.set(targetPath, await snapshotPatchTarget(targetPath));
+  }
 
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(targetPath, patch.newContent, "utf8");
-    applied += 1;
+  let applied = 0;
+  try {
+    for (const patch of normalizedPatchSet.patches) {
+      const targetPath = resolveWorkspacePatchPath(rootDir, patch.filePath);
+      if (patch.action === "delete") {
+        await fs.rm(targetPath, { force: true });
+        applied += 1;
+        continue;
+      }
+
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, patch.newContent, "utf8");
+      applied += 1;
+    }
+  } catch (error) {
+    const rollbackErrors = [];
+    for (const [targetPath, snapshot] of Array.from(snapshots.entries()).reverse()) {
+      try {
+        await restorePatchTarget(targetPath, snapshot);
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      error.rollbackErrors = rollbackErrors;
+    }
+    throw error;
   }
 
   output.write(`Multi-file architectural patch applied: ${applied}/${attempted} file(s).\n`);
@@ -415,7 +631,11 @@ async function generateParameterizedFix(rawSnippet, options = {}) {
     : resolveLlmProvider(process.env, options);
 
   if (!provider) {
-    warn(FREE_SQL_REMEDIATION_MESSAGE);
+    const activationError = new Error(ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE);
+    if (typeof options.onProviderFailure === "function") {
+      options.onProviderFailure(activationError, null);
+    }
+    warn(activationError.message);
     return rawSnippet;
   }
 
@@ -429,17 +649,31 @@ async function generateParameterizedFix(rawSnippet, options = {}) {
 
   let response;
   try {
-    response = await client.chat.completions.create(
-      {
-        model: provider.model,
-        messages: [
-          { role: "system", content: SURGICAL_LLM_SYSTEM_PROMPT },
-          { role: "user", content: rawSnippet }
-        ],
-        temperature: 0
-      },
-      { timeout: resolveLlmTimeoutMs(process.env, options) }
-    );
+    if (!options.client && provider.provider === "preflight-pro") {
+      response = await requestPreflightProxy({
+        endpoint: provider.endpoint,
+        licenseKey: provider.apiKey,
+        system: SURGICAL_LLM_SYSTEM_PROMPT,
+        userContent: rawSnippet,
+        maxTokens: options.maxTokens || DEFAULT_LLM_MAX_TOKENS,
+        temperature: 0,
+        timeoutMs: resolveLlmTimeoutMs(process.env, options),
+        transport: options.transport
+      });
+    } else {
+      response = await client.chat.completions.create(
+        {
+          model: provider.model,
+          messages: [
+            { role: "system", content: SURGICAL_LLM_SYSTEM_PROMPT },
+            { role: "user", content: rawSnippet }
+          ],
+          max_tokens: options.maxTokens || DEFAULT_LLM_MAX_TOKENS,
+          temperature: 0
+        },
+        { timeout: resolveLlmTimeoutMs(process.env, options) }
+      );
+    }
   } catch (error) {
     warn(formatProviderFailureMessage(error, provider));
     if (typeof options.onProviderFailure === "function") {
@@ -447,26 +681,35 @@ async function generateParameterizedFix(rawSnippet, options = {}) {
     }
     return rawSnippet;
   }
-  logTokenUsage(response, log);
-  const proposedFix = extractChatCompletionText(response);
+  if (response?.usage) {
+    logTokenUsage(response, log);
+  }
+  const proposedFix = !options.client && provider.provider === "preflight-pro"
+    ? extractProxyCodeFragment(extractPreflightProxyText(response))
+    : extractChatCompletionText(response);
+  const normalizedFix = !options.client && provider.provider === "preflight-pro"
+    ? await normalizeProxySqlFix(rawSnippet, proposedFix)
+    : proposedFix;
 
-  await verifySyntaxSafety(proposedFix);
-  return proposedFix;
+  await verifySyntaxSafety(normalizedFix);
+  return normalizedFix;
 }
 
 module.exports = {
+  ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE,
   applyMultiFilePatchSet,
-  FREE_SQL_REMEDIATION_MESSAGE,
   findSqlConcatenations,
   formatProviderFailureMessage,
   generateParameterizedFix,
   MANUAL_REVIEW_MESSAGE,
   MANUAL_REVIEW_REQUIRED,
+  PRO_ENGINE_CONNECTION_ERROR,
   parseMultiFileRemediationJson,
   parseJavaScript,
   resolveLlmProvider,
   resolveLlmTimeoutMs,
   renderMultiFilePatchPreview,
   SURGICAL_LLM_SYSTEM_PROMPT,
+  verifyPatchedSourceSyntax,
   verifySyntaxSafety
 };

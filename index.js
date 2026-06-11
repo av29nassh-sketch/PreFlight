@@ -15,7 +15,8 @@ const ParserBinding = require("web-tree-sitter");
 const { colorize, createLogger } = require("./logger");
 const {
   findSqlConcatenations,
-  generateParameterizedFix: generateSqlParameterizedFix
+  generateParameterizedFix: generateSqlParameterizedFix,
+  applyMultiFilePatchSet: applyDeepReasoningPatchSetDefault
 } = require("./remediationEngine");
 const {
   analyzeTaintGraph,
@@ -40,6 +41,7 @@ const {
   activateLicenseKey: activateDefaultLicenseKey,
   getRepositoryContext: getDefaultRepositoryContext,
   resolveStoredLicenseKey: resolveDefaultStoredLicenseKey,
+  TRI_STATE_RISK_SCORE,
   verifyFixPermission: verifyDefaultFixPermission
 } = require("./src/licensing/licenseManager");
 const { reportTelemetry: reportTelemetryDefault } = require("./src/telemetry/cloudReporter");
@@ -47,7 +49,7 @@ const {
   isManualReviewRequiredError,
   isPaymentRequiredError,
   MANUAL_REVIEW_MESSAGE,
-  PAYWALL_UPGRADE_MESSAGE,
+  PRO_ENGINE_CONNECTION_ERROR,
   routeDeepRemediation: routeDeepRemediationDefault
 } = require("./src/router/cloud");
 const { startMcpServer: startDefaultMcpServer } = require("./src/mcp/server");
@@ -3119,11 +3121,47 @@ function mergeReasoningFindings(findings, reasoningResult, rootDir = process.cwd
 
 function shouldRouteAmbiguousFindings(env = process.env) {
   return Boolean(
-    env.PREFLIGHT_REASONING_API_KEY ||
-    env.PREFLIGHT_CLOUD_API_KEY ||
-    env.PREFLIGHT_LOCAL_LLM_URL ||
-    env.OPENROUTER_API_KEY
+    env.PREFLIGHT_PRO_KEY ||
+    env.PREFLIGHT_PRO_LICENSE_KEY
   );
+}
+
+function isOfflineLocalFixFinding(item) {
+  return item?.fix?.kind === "credential" || item?.fix?.kind === "scaffold-server-action";
+}
+
+function isClaudePhaseFixFinding(item) {
+  return item?.fix?.kind === "sql-remediation" || (item?.ruleId === "llm-reasoning" && item?.patchSet);
+}
+
+function renderFixPhaseBanner(phase) {
+  if (phase === "local") {
+    return "🔍 [PHASE 1] Running Offline Local AST Optimization Pass...\n";
+  }
+
+  if (phase === "pro") {
+    return "🚀 [PHASE 2] Handing Off Remaining Architectural Flaws to Claude Deep Reasoning Engine...\n";
+  }
+
+  return "";
+}
+
+function mergeFixResults(...results) {
+  return results.reduce((totals, result) => ({
+    attempted: totals.attempted + (result?.attempted || 0),
+    applied: totals.applied + (result?.applied || 0),
+    skipped: totals.skipped + (result?.skipped || 0),
+    unsupported: totals.unsupported + (result?.unsupported || 0),
+    ciBlocked: totals.ciBlocked || result?.ciBlocked === true,
+    reported: totals.reported || result?.reported === true
+  }), {
+    attempted: 0,
+    applied: 0,
+    skipped: 0,
+    unsupported: 0,
+    ciBlocked: false,
+    reported: false
+  });
 }
 
 function askQuestion(question, options = {}) {
@@ -3207,6 +3245,30 @@ function renderCiFixPreview(filePath, fix) {
   ].join("\n");
 }
 
+function renderFixPreviewHeading(filePath, node) {
+  if (node?.kind === "credential") {
+    return `\n[LOCAL] AST fix available in ${filePath}\n`;
+  }
+
+  if (node?.kind === "sql-remediation") {
+    return `\n[PRO] SQL fix generated via Claude for ${filePath}\n`;
+  }
+
+  return `\n[PREFLIGHT] Fix available in ${filePath}\n`;
+}
+
+function renderScaffoldFixLog(filePath, scaffoldResult) {
+  const lines = [`\n[LOCAL] AST scaffold applied for ${filePath}`];
+  if (scaffoldResult?.actionFile) {
+    lines.push(`Created server action bridge: ${scaffoldResult.actionFile}`);
+  }
+  if (scaffoldResult?.clientFile) {
+    lines.push(`Updated client component: ${scaffoldResult.clientFile}`);
+  }
+  lines.push("");
+  return `${lines.join("\n")}\n`;
+}
+
 async function promptAndApplyFix(filePath, node, originalSourceBytes, options = {}) {
   const replacementText = node.replacement;
   const startByte = node.startByte;
@@ -3242,7 +3304,7 @@ async function promptAndApplyFix(filePath, node, originalSourceBytes, options = 
     return originalSourceBytes;
   }
 
-  output.write(`\n[PREFLIGHT PRO] Vulnerability found in ${filePath}\n`);
+  output.write(renderFixPreviewHeading(filePath, node));
   output.write(`\u001b[91m(-) ${leakedKey}\u001b[0m\n`);
   output.write(`\u001b[92m(+) ${replacementText}\u001b[0m\n`);
 
@@ -3282,15 +3344,24 @@ function assertNonOverlappingFixes(fixes) {
 async function applyScanFixes(findings, options = {}) {
   const fixesByFile = new Map();
   const scaffoldFixes = [];
+  const reasoningPatchFindings = [];
+  const modifiedFilePaths = new Set();
   const generateParameterizedFix = options.generateParameterizedFix || generateSqlParameterizedFix;
+  const applyDeepReasoningPatchSet = options.applyMultiFilePatchSet || applyDeepReasoningPatchSetDefault;
   const usesDefaultSqlRemediator = !options.generateParameterizedFix;
   let sqlRemediationUnavailable = false;
   let attempted = 0;
   let applied = 0;
   let skipped = 0;
   let unsupported = 0;
+  const rootDir = path.resolve(options.rootDir || process.cwd());
 
   for (const item of findings) {
+    if (item?.ruleId === "llm-reasoning" && item?.patchSet) {
+      reasoningPatchFindings.push(item);
+      continue;
+    }
+
     if (!item.fix) {
       unsupported += 1;
       continue;
@@ -3329,7 +3400,7 @@ async function applyScanFixes(findings, options = {}) {
       }
     }
 
-    unsupported += scaffoldFixes.length;
+    unsupported += scaffoldFixes.length + reasoningPatchFindings.length;
     return {
       attempted: attemptedPreviews,
       applied: 0,
@@ -3345,6 +3416,7 @@ async function applyScanFixes(findings, options = {}) {
     for (const [filePath, fixes] of fixesByFile) {
       let currentSourceBytes = await fs.readFile(filePath);
       const resolvedFixes = [];
+      let fileApplied = false;
 
       for (const { fix } of fixes) {
         if (fix.kind === "sql-remediation") {
@@ -3385,18 +3457,73 @@ async function applyScanFixes(findings, options = {}) {
           skipped += 1;
         } else {
           applied += 1;
+          fileApplied = true;
         }
         attempted += 1;
       }
 
       await assertSourceSyntaxSafe(filePath, currentSourceBytes.toString("utf8"));
       await fs.writeFile(filePath, currentSourceBytes);
+      if (fileApplied) {
+        modifiedFilePaths.add(path.resolve(filePath));
+      }
     }
 
     for (const item of scaffoldFixes) {
-      await applyScaffoldTransaction(item.filePath, item.leak);
+      const scaffoldResult = await applyScaffoldTransaction(item.filePath, item.leak);
       attempted += 1;
       applied += 1;
+      (promptOptions.output || process.stdout).write(renderScaffoldFixLog(item.filePath, scaffoldResult));
+      if (scaffoldResult?.clientFile) {
+        modifiedFilePaths.add(path.resolve(scaffoldResult.clientFile));
+      }
+      if (scaffoldResult?.actionFile) {
+        modifiedFilePaths.add(path.resolve(scaffoldResult.actionFile));
+      }
+    }
+
+    for (const item of reasoningPatchFindings) {
+      const conflictingPatchPaths = Array.isArray(item?.patchSet?.patches)
+        ? item.patchSet.patches
+            .map((patch) => patch?.filePath || patch?.file_path)
+            .filter((filePath) => typeof filePath === "string" && filePath.trim() !== "")
+            .map((filePath) => path.resolve(rootDir, filePath))
+            .filter((filePath) => modifiedFilePaths.has(filePath))
+        : [];
+
+      if (conflictingPatchPaths.length > 0) {
+        for (const filePath of conflictingPatchPaths) {
+          const displayPath = path.relative(rootDir, filePath) || filePath;
+          (promptOptions.output || process.stdout).write(
+            `⚠️ Skipping deep patch for ${displayPath} to prevent overwriting an applied foundational fix.\n`
+          );
+        }
+        unsupported += 1;
+        continue;
+      }
+
+      const patchResult = await applyDeepReasoningPatchSet(item.patchSet, {
+        ...promptOptions,
+        output: promptOptions.output || process.stdout,
+        question: "Apply this deep reasoning fix? (y/N): ",
+        rootDir
+      });
+      attempted += patchResult?.attempted || 0;
+      applied += patchResult?.applied || 0;
+      skipped += patchResult?.skipped || 0;
+      if (patchResult?.manualReviewRequired) {
+        unsupported += 1;
+        continue;
+      }
+
+      if ((patchResult?.applied || 0) > 0 && Array.isArray(item?.patchSet?.patches)) {
+        for (const patch of item.patchSet.patches) {
+          const patchFilePath = patch?.filePath || patch?.file_path;
+          if (typeof patchFilePath === "string" && patchFilePath.trim() !== "") {
+            modifiedFilePaths.add(path.resolve(rootDir, patchFilePath));
+          }
+        }
+      }
     }
   } finally {
     close();
@@ -3433,6 +3560,44 @@ function renderReport(findings, options = {}) {
   }
 
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function resolveTriStateRiskScore(findings = []) {
+  const normalizedFindings = Array.isArray(findings) ? findings : [];
+  const driftStates = new Set(["AMBIGUOUS", "PATCH"]);
+  const hasHardBlock = normalizedFindings.some((item) => {
+    const state = String(item?.state || "").toUpperCase();
+    return item?.severity === "critical" && !driftStates.has(state) && item?.ruleId !== "llm-reasoning";
+  });
+
+  if (hasHardBlock) {
+    return TRI_STATE_RISK_SCORE.HARD_BLOCK;
+  }
+
+  const hasHighRiskDrift = normalizedFindings.some((item) => {
+    const state = String(item?.state || "").toUpperCase();
+    return (
+      driftStates.has(state) ||
+      item?.severity === "warning" ||
+      item?.ruleId === "ambiguous-ast" ||
+      item?.ruleId === "llm-reasoning"
+    );
+  });
+
+  if (hasHighRiskDrift) {
+    return TRI_STATE_RISK_SCORE.HIGH_RISK_DRIFT;
+  }
+
+  return TRI_STATE_RISK_SCORE.LIKELY_SAFE;
+}
+
+function renderTriStateRiskScore(findings = []) {
+  const classification = resolveTriStateRiskScore(findings);
+  return [
+    "Tri-State Risk Score",
+    `${classification.icon} ${classification.label}: ${classification.description}.`,
+    ""
+  ].join("\n");
 }
 
 function toSarifUri(filePath, rootDir) {
@@ -3804,26 +3969,21 @@ function normalizeCliArgs(argv) {
   return argv;
 }
 
-function applyOpenAiKeyFlag(argv = process.argv) {
+function stripDeprecatedAiKeyFlags(argv = process.argv) {
   const nextArgv = [];
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
 
-    if (arg === "--openai-key") {
+    if (arg.startsWith("--") && arg.endsWith("-key")) {
       const value = argv[index + 1];
       if (value && !value.startsWith("-")) {
-        process.env.OPENAI_API_KEY = value;
         index += 1;
       }
       continue;
     }
 
-    if (arg.startsWith("--openai-key=")) {
-      const value = arg.slice("--openai-key=".length);
-      if (value) {
-        process.env.OPENAI_API_KEY = value;
-      }
+    if (/^--[^=]+-key=/.test(arg)) {
       continue;
     }
 
@@ -3857,9 +4017,10 @@ async function waitForTelemetryFlush(telemetryPromise, timeoutMs = 400) {
 }
 
 async function runCli(argv = process.argv, options = {}) {
-  const normalizedArgv = normalizeCliArgs(applyOpenAiKeyFlag(argv));
+  const normalizedArgv = normalizeCliArgs(stripDeprecatedAiKeyFlags(argv));
   const activateLicenseKey = options.activateLicenseKey || activateDefaultLicenseKey;
   const auditDependencyRunner = options.auditDependencies || auditDependencies;
+  const forceRouteAmbiguous = options.routeAmbiguous;
   const startMcpServer = options.startMcpServer || startDefaultMcpServer;
   const verifyFixPermission = options.verifyFixPermission || verifyDefaultFixPermission;
   const reportTelemetry = options.reportTelemetry || reportTelemetryDefault;
@@ -4115,6 +4276,9 @@ async function runCli(argv = process.argv, options = {}) {
         process.exitCode = 1;
         return;
       }
+      if (permission.receipt) {
+        process.stdout.write(`${permission.receipt}\n`);
+      }
     }
     if (options.fix && isSingleFileScan && !ciEnvironment.isCi) {
       const checkoutRouteResult = await applyCheckoutRouteDemoRemediation(requestedPath, { rootDir });
@@ -4134,9 +4298,70 @@ async function runCli(argv = process.argv, options = {}) {
           relativePath: toPosix(path.relative(rootDir, requestedPath))
         }], { policy: scanPolicy })
         : await scanProject(rootDir, { policy: scanPolicy });
-    if (
+    let fixResult = null;
+
+    if (options.fix) {
+      const output = options.output || process.stdout;
+      const localFixFindings = findings.filter(isOfflineLocalFixFinding);
+      output.write(renderFixPhaseBanner("local"));
+      const localFixResult = await applyScanFixes(localFixFindings, {
+        ci: ciEnvironment.isCi,
+        output,
+        input: options.input,
+        ask: options.ask,
+        rootDir
+      });
+      findings = options.diff
+        ? await scanProjectDiff(rootDir, { policy: scanPolicy })
+        : isSingleFileScan
+          ? await scanFiles(rootDir, [{
+            filePath: requestedPath,
+            relativePath: toPosix(path.relative(rootDir, requestedPath))
+          }], { policy: scanPolicy })
+          : await scanProject(rootDir, { policy: scanPolicy });
+
+      let proPhaseBannerPrinted = false;
+      if (
+        findings.some(isAmbiguousAstFinding) &&
+        (forceRouteAmbiguous === true || options.routeAmbiguous === true || shouldRouteAmbiguousFindings(process.env))
+      ) {
+        output.write(renderFixPhaseBanner("pro"));
+        proPhaseBannerPrinted = true;
+        try {
+          const reasoningResult = await routeAmbiguousFindingsToReasoning(findings, {
+            rootDir,
+            routeDeepRemediation
+          });
+          findings = mergeReasoningFindings(findings, reasoningResult, rootDir);
+        } catch (error) {
+          if (isPaymentRequiredError(error)) {
+            process.stdout.write(`${PRO_ENGINE_CONNECTION_ERROR}\n`);
+          } else if (isManualReviewRequiredError(error)) {
+            process.stdout.write(`${MANUAL_REVIEW_MESSAGE}\n`);
+          } else {
+            createLogger({ stderr: process.stderr }).warn(
+              `Warning: ambiguous AST routing failed closed: ${error.message}`
+            );
+          }
+        }
+      }
+
+      const proPhaseFindings = findings.filter(isClaudePhaseFixFinding);
+      const shouldShowProBanner = proPhaseFindings.length > 0 && !proPhaseBannerPrinted;
+      if (shouldShowProBanner) {
+        output.write(renderFixPhaseBanner("pro"));
+      }
+      const proFixResult = await applyScanFixes(proPhaseFindings, {
+        ci: ciEnvironment.isCi,
+        output,
+        input: options.input,
+        ask: options.ask,
+        rootDir
+      });
+      fixResult = mergeFixResults(localFixResult, proFixResult);
+    } else if (
       findings.some(isAmbiguousAstFinding) &&
-      (options.routeAmbiguous === true || shouldRouteAmbiguousFindings(process.env))
+      (forceRouteAmbiguous === true || options.routeAmbiguous === true || shouldRouteAmbiguousFindings(process.env))
     ) {
       try {
         const reasoningResult = await routeAmbiguousFindingsToReasoning(findings, {
@@ -4146,7 +4371,7 @@ async function runCli(argv = process.argv, options = {}) {
         findings = mergeReasoningFindings(findings, reasoningResult, rootDir);
       } catch (error) {
         if (isPaymentRequiredError(error)) {
-          process.stdout.write(`${PAYWALL_UPGRADE_MESSAGE}\n`);
+          process.stdout.write(`${PRO_ENGINE_CONNECTION_ERROR}\n`);
         } else if (isManualReviewRequiredError(error)) {
           process.stdout.write(`${MANUAL_REVIEW_MESSAGE}\n`);
         } else {
@@ -4156,19 +4381,9 @@ async function runCli(argv = process.argv, options = {}) {
         }
       }
     }
-    let fixResult = null;
 
     if (options.fix) {
-      fixResult = isSingleFileScan
-        ? (ciEnvironment.isCi ? null : await applyAstCredentialRemediation(findings, { rootDir }))
-        : null;
-      fixResult = fixResult || await applyScanFixes(findings, {
-        ci: ciEnvironment.isCi,
-        output: process.stdout
-      });
-    }
-
-    if (options.fix) {
+      process.stdout.write(renderTriStateRiskScore(findings));
       if (!fixResult?.reported) {
         process.stdout.write(
           `PreFlight remediation attempted ${fixResult?.attempted || 0} fix(es): ` +
@@ -4180,6 +4395,7 @@ async function runCli(argv = process.argv, options = {}) {
     } else if (options.json) {
       process.stdout.write(`${JSON.stringify(findings, null, 2)}\n`);
     } else {
+      process.stdout.write(renderTriStateRiskScore(findings));
       process.stdout.write(renderReport(findings, { color: options.color, stream: process.stdout }));
     }
 
@@ -4229,7 +4445,6 @@ async function runCli(argv = process.argv, options = {}) {
 
 module.exports = {
   auditDependencies,
-  applyOpenAiKeyFlag,
   applyScanFixes,
   applyFixWithRollback,
   detectSecret,
@@ -4252,10 +4467,13 @@ module.exports = {
   promptAndApplyFix,
   promptForLicenseKey,
   readPreflightConfig,
+  stripDeprecatedAiKeyFlags,
   applyAstCredentialRemediation,
   renderReport,
   renderAuditReport,
+  renderTriStateRiskScore,
   routeAmbiguousFindingsToReasoning,
+  resolveTriStateRiskScore,
   renderSarif,
   runCli,
   savePreflightConfig,

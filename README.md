@@ -1,68 +1,96 @@
-<div align="center">
+# PreFlight 🚀
 
-# 🛑 PreFlight Check
+Stop AI Coding Drift before it becomes production technical debt. PreFlight is a local-first safety gate and deterministic orchestration engine designed to catch risky, hallucinated, or unverified AI-generated code snippets inside Claude, Cursor, and Copilot workflows.
 
-<img src="demo.gif" alt="PreFlight Terminal Demo" width="800"/>
+## 🧠 The Tri-State Risk Score Engine
+PreFlight parses your code down to an Abstract Syntax Tree (AST) using Tree-Sitter, passing ambiguous findings through deep reasoning layers to enforce explicit architectural contracts:
+- 🔴 **Hard Block**: Exposed frontend secrets, leaking database service roles, or missing Supabase Row Level Security (RLS).
+- 🟡 **High-Risk Drift**: Structural state inconsistencies, un-idempotent webhooks, or open CORS contexts.
+- 🟢 **Likely Safe**: Standard algorithmic changes matching your pre-defined stack rules.
 
-**Stop AI coding drift before it becomes technical debt.**
+## 📦 Product Tiers
+- **PreFlight Guardian**: Our free-tier local engine. Protects against basic structural defects and provides up to 5 auto-fixes.
+- **PreFlight Pro**: Our premium engine unlocking unlimited deep reasoning auto-fixes powered by optimized `claude-sonnet-4-6` routing.
 
-</div>
+## 🛠️ Installation & Beta Activation
 
-Cursor and Claude can generate hundreds of lines before your coffee cools. That speed is the point, but it makes human review the bottleneck.
-
-PreFlight Check is the local safety gate for fast-moving founders and vibecoders building with Next.js and Supabase. It catches the scary stuff before you commit: **silently modified database writes, altered auth logic, billing route changes, exposed secrets, and tenant-boundary drift**. Then it explains the risk in plain English so you do not have to reverse-engineer your own app at midnight.
-
-## 🚦 The Tri-State Risk Score
-
-PreFlight Check parses **structural logic**, not just regex matches. It looks at what changed, where it changed, and whether the diff touched security-sensitive code paths.
-
-### 🔴 CONFIRMED FINDING (Hard Block)
-
-AI injected a fatal flaw.
-
-Examples: **exposed frontend secrets**, raw database writes, hardcoded billing keys, or missing Supabase RLS protections.
-
-The commit is flagged. PreFlight explains the issue and can apply an interactive auto-patch when run with the --fix flag or via the MCP preflight_fix tool.
-
-### 🟡 HIGH-RISK DRIFT (Needs Runtime Check)
-
-AI modified a sensitive boundary that cannot be proven safe from the local diff alone.
-
-Examples: auth wrappers, tenant helpers, Supabase RPC calls, checkout routes, webhook handlers, or permission logic.
-
-The CLI pauses the commit and outputs a **plain-English QA instruction** that tells you what deployed consequence to test before shipping.
-
-### 🟢 LIKELY SAFE (Trust Receipt)
-
-Structural security guards were verified.
-
-The commit proceeds cleanly and PreFlight prints a receipt so you know the local guard actually ran.
-
-## ⚡ Why PreFlight? (The Vibecoder Reality)
-
-- **Zero-Latency Safety:** Runs locally in your terminal or as an MCP server, right where AI-generated code enters your workflow.
-- **The "Plain-English" Translation:** Translates what the AI changed so devs do not have to reverse-engineer their own apps.
-- **Zero Source Upload:** Runs entirely locally. Your code never leaves your machine.
-
-## Quick Start
+To participate in the PreFlight Pro Closed Beta, clone the repository locally:
 
 ```bash
-# Run a safe, read-only structural scan on uncommitted changes
-npx preflight-guardian scan . --diff
-
-# Run an interactive scan that lets you safely review and auto-patch findings
-npx preflight-guardian scan --fix
-
-# Hook it directly into Claude Code / Cursor via MCP
-preflight install-mcp
+git clone https://github.com/av29nassh-sketch/PreFlight.git
+cd PreFlight
+npm install
 ```
 
-## Built For The Messy Middle
+Run a local Guardian scan:
 
-PreFlight Check is not trying to be another dashboard you forget to open.
+```bash
+node index.js scan .
+```
 
-It is for the moment right before `git commit`, when your AI agent has touched a login route, a Supabase query, or a Stripe webhook and you need to know one thing:
+Run an interactive remediation pass:
 
-**Did the AI just make my app easier to break?**
+```bash
+node index.js scan . --fix
+```
 
-PreFlight answers that locally, quickly, and in language a builder can act on.
+## 🚀 PreFlight Pro (Paid Tier / Beta)
+
+PreFlight Pro is the paid tier of the product and is currently running as an invite-only beta.
+
+### Pricing Transparency
+- **Free Tier**: 100% offline AST syntax scanning and basic structural auto-fixes.
+- **Pro Tier**: `$29/month` per developer. Unlocks the Claude Deep Reasoning pipeline.
+
+### Pro Command Runtime
+
+If you are part of the closed beta, set your Pro key inside the same shell session before running `--fix`.
+
+Note: the current CLI runtime reads `PREFLIGHT_PRO_KEY`.
+
+```bash
+$env:PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-YYYYMMDD-XXXX"
+node index.js scan . --fix
+```
+
+```bash
+export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-YYYYMMDD-XXXX"
+node ./index.js scan ./path-to-code --fix
+```
+
+### 2-Phase Pipeline
+
+PreFlight Pro now runs as a strict 2-phase remediation pipeline:
+
+1. **Phase 1: Offline Local AST Sweep**
+   PreFlight completes an ultra-fast offline structural pass first and applies any local-only fixes it can resolve without calling Claude.
+2. **Phase 2: Claude Deep Reasoning Handoff**
+   Only the remaining SQL and complex architectural flaws are handed off through the secure proxy-backed Claude reasoning path for premium remediation suggestions.
+
+## 🔌 Editor & MCP Usage
+
+PreFlight can run directly in the terminal or as an MCP server for AI-native editors.
+
+Start the MCP server locally:
+
+```bash
+node index.js mcp
+```
+
+Available MCP tools include:
+- `scan_project`
+- `preflight_fix`
+- `audit_dependencies`
+
+## ✅ Post-Fix Verification Loop
+
+PreFlight is designed to be used as a closed loop, not a one-shot scanner:
+
+1. Generate or modify code with Claude, Cursor, Copilot, or another AI assistant.
+2. Run `node index.js scan .` to classify the change under the Tri-State Risk Score.
+3. If PreFlight returns `🔴 Hard Block`, stop and repair the structural issue before moving forward.
+4. If PreFlight returns `🟡 High-Risk Drift`, run `node index.js scan . --fix` and inspect every proposed fix before applying it.
+5. Re-run `node index.js scan .` after each accepted fix to confirm the repository settles into `🟢 Likely Safe`.
+6. Ship only after the final verification pass is green and the structural receipt matches the architecture boundary you intended.
+
+This verification loop is the product: scan, review, patch, re-scan, then deploy with confidence.

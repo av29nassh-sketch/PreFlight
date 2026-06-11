@@ -1,1 +1,80 @@
-.vercel
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Next.js build output and caches
+.next/
+**/.next/
+out/
+**/out/
+build/
+**/build/
+dist/
+**/dist/
+.turbo/
+**/.turbo/
+.cache/
+**/.cache/
+tsconfig.tsbuildinfo
+next-env.d.ts
+
+# Vercel local metadata
+.vercel/
+**/.vercel/
+
+# Environment files and local secrets
+.env
+.env.*
+*.env
+*.env.*
+*.local
+*.bak
+*.backup
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+service-account*.json
+*service-account*.json
+
+# Logs, reports, and local traces
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.next-dev-*.log
+coverage/
+**/coverage/
+test-results/
+playwright-report/
+*.heapsnapshot
+*.trace
+*.trace.json
+*.trace.json.gz
+
+# Generated screenshots, previews, and large media
+screenshots/
+temporary screenshots/
+media/
+videos/
+recordings/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+*.psd
+*.ai

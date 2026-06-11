@@ -518,6 +518,38 @@ describe("PreFlight Check", () => {
     expect(piped).not.toMatch(/\x1b\[[0-9;]+m/);
   });
 
+  test("classifies findings under the locked Tri-State risk score", () => {
+    const { resolveTriStateRiskScore, renderTriStateRiskScore } = require("../index");
+
+    expect(resolveTriStateRiskScore([])).toMatchObject({
+      label: "Likely Safe"
+    });
+    expect(resolveTriStateRiskScore([
+      {
+        ruleId: "ambiguous-ast",
+        severity: "warning",
+        filePath: "/repo/app/api/webhook.ts",
+        line: 4,
+        message: "Webhook idempotency needs runtime verification.",
+        state: "AMBIGUOUS"
+      }
+    ])).toMatchObject({
+      label: "High-Risk Drift"
+    });
+    expect(resolveTriStateRiskScore([
+      {
+        ruleId: "frontend-secret",
+        severity: "critical",
+        filePath: "/repo/app/page.tsx",
+        line: 3,
+        message: "Potential secret exposed in a client component."
+      }
+    ])).toMatchObject({
+      label: "Hard Block"
+    });
+    expect(renderTriStateRiskScore([])).toContain("🟢 Likely Safe: Standard local edits.");
+  });
+
   test("uses a cached license key when Lemon Squeezy validates it", async () => {
     const { ensureLicenseVerified } = require("../index");
     const homeDir = makeProject({
@@ -677,21 +709,21 @@ describe("PreFlight Check", () => {
     ].join("\n"));
   });
 
-  test("maps --openai-key into OPENAI_API_KEY and strips the flag before commander parsing", () => {
-    const { applyOpenAiKeyFlag } = require("../index");
+  test("strips legacy AI key flags without wiring any local AI key", () => {
+    const { stripDeprecatedAiKeyFlags } = require("../index");
     const previousKey = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
 
     try {
-      const argv = applyOpenAiKeyFlag([
+      const argv = stripDeprecatedAiKeyFlags([
         "node",
         "index.js",
         "scan",
         "./demo",
-        "--openai-key=unit-test-openai-key"
+        "--anthropic-key=unit-test-anthropic-key"
       ]);
 
-      expect(process.env.OPENAI_API_KEY).toBe("unit-test-openai-key");
+      expect(process.env.OPENAI_API_KEY).toBeUndefined();
       expect(argv).toEqual(["node", "index.js", "scan", "./demo"]);
     } finally {
       if (previousKey === undefined) {
@@ -1032,8 +1064,8 @@ describe("PreFlight Check", () => {
     expect(writes.join("")).toContain("llm-reasoning");
   });
 
-  test("scan command prints the paywall message when cloud remediation returns 402", async () => {
-    const { PAYWALL_UPGRADE_MESSAGE, PreFlightPaymentRequiredError } = require("../src/router/cloud");
+  test("scan command prints the unified Pro engine error when cloud remediation returns 402", async () => {
+    const { PRO_ENGINE_CONNECTION_ERROR, PreFlightPaymentRequiredError } = require("../src/router/cloud");
     const { runCli } = require("../index");
     const root = makeProject({
       "app/actions/proxy.ts": [
@@ -1076,7 +1108,7 @@ describe("PreFlight Check", () => {
     }
 
     expect(process.exitCode).toBe(1);
-    expect(writes.join("")).toContain(PAYWALL_UPGRADE_MESSAGE);
+    expect(writes.join("")).toContain(PRO_ENGINE_CONNECTION_ERROR);
   });
 
   test("scan command prints the manual review message when cloud remediation refuses auto patching", async () => {
@@ -1171,7 +1203,8 @@ describe("PreFlight Check", () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(`[PREFLIGHT PRO] Vulnerability found in ${path.join(root, "dangerous-code.js")}`);
+    expect(result.stdout).toContain("🔍 [PHASE 1] Running Offline Local AST Optimization Pass...");
+    expect(result.stdout).toContain(`[LOCAL] AST fix available in ${path.join(root, "dangerous-code.js")}`);
     expect(result.stdout).toContain("\u001b[91m(-) \"" + STRIPE_KEY + "\"\u001b[0m");
     expect(result.stdout).toContain("\u001b[92m(+) process.env.STRIPE_SECRET_KEY\u001b[0m");
     expect(result.stdout).toContain("Fix applied! Remember to add STRIPE_SECRET_KEY to your .env file.");
@@ -1208,7 +1241,7 @@ describe("PreFlight Check", () => {
     expect(result.stderr).toContain(
       "🔴 Org Account Detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator."
     );
-    expect(result.stdout).not.toContain("[PREFLIGHT PRO] Vulnerability found");
+    expect(result.stdout).not.toContain("[LOCAL] AST fix available");
     expect(fs.readFileSync(path.join(root, "dangerous-code.js"), "utf8")).toBe("const stripe_key = \"" + STRIPE_KEY + "\";\n");
   });
 

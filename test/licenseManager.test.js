@@ -7,6 +7,8 @@ const ACTIVATION_MESSAGE = "\u2705 PreFlight Pro activated successfully! Unlimit
 const EMAIL_MISMATCH_MESSAGE = "\u274c Email does not match the purchase record.";
 const EXHAUSTED_MESSAGE =
   "\u26a0\ufe0f Free fixes exhausted (5/5). Upgrade to PreFlight Pro for unlimited AI auto-fixes for a one-time payment of $49 / \u20b91999: https://yourwebsite.com/buy";
+const BETA_ACTIVE_RECEIPT =
+  "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes (Expires 14 days from issue date).";
 const ORG_ACCOUNT_MESSAGE =
   "🔴 Org Account Detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator.";
 
@@ -21,6 +23,7 @@ function readConfigFile(homeDir) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   while (roots.length > 0) {
     fs.rmSync(roots.pop(), { recursive: true, force: true });
   }
@@ -244,6 +247,54 @@ describe("licenseManager", () => {
       allowed: false,
       tier: "free",
       message: EXHAUSTED_MESSAGE
+    });
+  });
+
+  test("allows a local beta key for 14 days without calling Lemon Squeezy", async () => {
+    const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
+    const homeDir = makeHome();
+    let validated = false;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-10T00:00:00.000Z"));
+    await writeConfig({ freeFixesUsed: 5, licenseKey: "PREFLIGHT-BETA-20260529-TEST", instanceId: null }, { homeDir });
+
+    const result = await verifyFixPermission({
+      homeDir,
+      requestLicenseValidation: async () => {
+        validated = true;
+        return { valid: true };
+      }
+    });
+
+    expect(validated).toBe(false);
+    expect(result).toEqual({
+      allowed: true,
+      tier: "pro",
+      receipt: BETA_ACTIVE_RECEIPT
+    });
+  });
+
+  test("rejects an expired local beta key before any online validation attempt", async () => {
+    const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
+    const homeDir = makeHome();
+    let validated = false;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-10T00:00:00.000Z"));
+    await writeConfig({ freeFixesUsed: 5, licenseKey: "PREFLIGHT-BETA-20260520-TEST", instanceId: null }, { homeDir });
+
+    const result = await verifyFixPermission({
+      homeDir,
+      requestLicenseValidation: async () => {
+        validated = true;
+        return { valid: true };
+      }
+    });
+
+    expect(validated).toBe(false);
+    expect(result).toEqual({
+      allowed: false,
+      tier: "pro",
+      message: "\u274c Beta license expired. Please request a fresh PreFlight beta key."
     });
   });
 

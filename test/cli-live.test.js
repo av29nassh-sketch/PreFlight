@@ -27,6 +27,10 @@ function runCli(command, options = {}) {
       {
         cwd: projectRoot,
         encoding: "utf8",
+        env: {
+          ...process.env,
+          ...(options.env || {})
+        },
         windowsHide: true
       },
       (error, stdout, stderr) => {
@@ -68,6 +72,8 @@ describe("PreFlight CLI live E2E", () => {
     const result = await runCli("node index.js scan ./demo-live-test");
 
     expect(result.code).toBe(1);
+    expect(result.stdout).toContain("Tri-State Risk Score");
+    expect(result.stdout).toContain("🔴 Hard Block: Secrets, leaked roles, missing RLS.");
     expect(result.stdout).toContain("PreFlight Check found 1 issue");
     expect(result.stdout).toContain("AWS Access Key ID");
     expect(result.stdout).toContain("config.ts:1");
@@ -84,5 +90,20 @@ describe("PreFlight CLI live E2E", () => {
     expect(result.stdout).toContain("Fix applied! Remember to add AWS_ACCESS_KEY_ID to your .env file.");
     expect(result.stdout).toContain("PreFlight remediation attempted 1 fix(es): 1 applied");
     expect(fs.readFileSync(configPath, "utf8")).toBe("const aws = process.env.AWS_ACCESS_KEY_ID;\n");
+  });
+
+  test("CLI prints the beta license receipt before running auto-fixes", async () => {
+    resetDemoFixture();
+
+    const result = await runCli("node index.js scan ./demo-live-test --fix", {
+      input: "y\n",
+      env: {
+        PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260601-TEST"
+      }
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("⚠️ Beta License Active — Unlocked Pro Auto-Fixes (Expires 14 days from issue date).");
+    expect(result.stdout).toContain("PreFlight remediation attempted 1 fix(es): 1 applied");
   });
 });

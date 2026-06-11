@@ -6,12 +6,36 @@ const path = require("node:path");
 const CONFIG_DIR = ".preflight";
 const CONFIG_FILE = "config.json";
 const FREE_FIX_LIMIT = 5;
+const BETA_LICENSE_PREFIX = "PREFLIGHT-BETA-";
+const BETA_LICENSE_WINDOW_DAYS = 14;
+const BETA_LICENSE_WINDOW_MS = BETA_LICENSE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+const BETA_LICENSE_ACTIVE_RECEIPT =
+  "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes (Expires 14 days from issue date).";
+const TRI_STATE_RISK_SCORE = Object.freeze({
+  HARD_BLOCK: Object.freeze({
+    icon: "\ud83d\udd34",
+    label: "Hard Block",
+    description: "Secrets, leaked roles, missing RLS"
+  }),
+  HIGH_RISK_DRIFT: Object.freeze({
+    icon: "\ud83d\udfe1",
+    label: "High-Risk Drift",
+    description: "State leaks, un-idempotent webhooks"
+  }),
+  LIKELY_SAFE: Object.freeze({
+    icon: "\ud83d\udfe2",
+    label: "Likely Safe",
+    description: "Standard local edits"
+  })
+});
 const LEMON_SQUEEZY_ACTIVATE_URL = "https://api.lemonsqueezy.com/v1/licenses/activate";
 const LEMON_SQUEEZY_VALIDATE_URL = "https://api.lemonsqueezy.com/v1/licenses/validate";
 const FREE_FIXES_EXHAUSTED_MESSAGE =
   "\u26a0\ufe0f Free fixes exhausted (5/5). Upgrade to PreFlight Pro for unlimited AI auto-fixes for a one-time payment of $49 / \u20b91999: https://yourwebsite.com/buy";
 const INVALID_LICENSE_MESSAGE =
   "\u274c License is inactive or invalid. Please run 'preflight activate <key>' with a valid key.";
+const EXPIRED_BETA_LICENSE_MESSAGE =
+  "\u274c Beta license expired. Please request a fresh PreFlight beta key.";
 const ORG_ACCOUNT_DETECTED_MESSAGE =
   "🔴 Org Account Detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator.";
 const ACTIVATION_MESSAGE = "\u2705 PreFlight Pro activated successfully! Unlimited AI auto-fixes unlocked.";
@@ -109,6 +133,67 @@ function postFormUrlEncoded(request) {
 
 function isOfflineError(error) {
   return OFFLINE_ERROR_CODES.has(error?.code);
+}
+
+function parseBetaLicenseCreationDate(licenseKey) {
+  const normalizedKey = typeof licenseKey === "string" ? licenseKey.trim() : "";
+  if (!normalizedKey.startsWith(BETA_LICENSE_PREFIX)) {
+    return null;
+  }
+
+  const parts = normalizedKey.split("-");
+  if (parts.length !== 4 || parts[0] !== "PREFLIGHT" || parts[1] !== "BETA") {
+    return null;
+  }
+
+  const dateString = parts[2];
+  if (!/^\d{8}$/.test(dateString)) {
+    return null;
+  }
+
+  const year = Number(dateString.slice(0, 4));
+  const month = Number(dateString.slice(4, 6));
+  const day = Number(dateString.slice(6, 8));
+  const creationDate = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    Number.isNaN(creationDate.getTime()) ||
+    creationDate.getUTCFullYear() !== year ||
+    creationDate.getUTCMonth() !== month - 1 ||
+    creationDate.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return creationDate;
+}
+
+function resolveBetaLicensePermission(licenseKey, repositoryContext, now = new Date()) {
+  const creationDate = parseBetaLicenseCreationDate(licenseKey);
+  if (!creationDate) {
+    return null;
+  }
+
+  const evaluationDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const ageMs = evaluationDate.getTime() - creationDate.getTime();
+  if (ageMs < 0 || ageMs > BETA_LICENSE_WINDOW_MS) {
+    return {
+      allowed: false,
+      tier: "pro",
+      message: EXPIRED_BETA_LICENSE_MESSAGE
+    };
+  }
+
+  const boundary = validateRepositoryOwnershipBoundary({
+    repositoryContext,
+    tier: "pro"
+  });
+
+  return boundary || {
+    allowed: true,
+    tier: "pro",
+    receipt: BETA_LICENSE_ACTIVE_RECEIPT
+  };
 }
 
 function parseGitConfigOrigin(rawConfig) {
@@ -397,6 +482,11 @@ async function verifyFixPermission(options = {}) {
     return freeBoundary || freePermission(config);
   }
 
+  const betaPermission = resolveBetaLicensePermission(configuredLicenseKey, repositoryContext, new Date());
+  if (betaPermission) {
+    return betaPermission;
+  }
+
   const explicitTier = resolveLicenseTier(null, config, env, options);
   const explicitBoundary = validateRepositoryOwnershipBoundary({
     repositoryContext,
@@ -534,6 +624,7 @@ module.exports = {
   LEMON_SQUEEZY_ACTIVATE_URL,
   LEMON_SQUEEZY_VALIDATE_URL,
   ORG_ACCOUNT_DETECTED_MESSAGE,
+  TRI_STATE_RISK_SCORE,
   activateLicenseKey,
   getRepositoryContext,
   getConfigPath,

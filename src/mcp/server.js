@@ -99,7 +99,7 @@ function registerMcpTools(server, options = {}) {
     },
     async ({ directory, diff = false, format = "text" }) => {
       const rootDir = path.resolve(cwd, directory || ".");
-      const policy = await loadPreflightPolicy(cwd);
+      const policy = await loadPreflightPolicy(options.rootDir || rootDir || process.cwd());
       const findings = diff ? await scanProjectDiff(rootDir, { policy }) : await scanProject(rootDir, { policy });
       const text = format === "json" ? JSON.stringify(findings, null, 2) : renderReport(findings, { color: false });
 
@@ -126,9 +126,12 @@ function registerMcpTools(server, options = {}) {
         };
       }
 
-      const policy = await loadPreflightPolicy(cwd);
+      const policy = await loadPreflightPolicy(options.rootDir || rootDir || process.cwd());
       const findings = diff ? await scanProjectDiff(rootDir, { policy }) : await scanProject(rootDir, { policy });
-      const fixResult = await applyScanFixes(findings, { ask: async () => "y" });
+      const fixResult = await applyScanFixes(findings, {
+        ask: async () => "y",
+        rootDir: options.rootDir || rootDir || process.cwd()
+      });
 
       if (permission.tier === "free") {
         await recordFreeFixUsage();
@@ -139,6 +142,7 @@ function registerMcpTools(server, options = {}) {
           {
             type: "text",
             text:
+              `${permission.receipt ? `${permission.receipt}\n` : ""}` +
               `PreFlight remediation attempted ${fixResult?.attempted || 0} fix(es): ` +
               `${fixResult?.applied || 0} applied, ${fixResult?.skipped || 0} skipped, ${fixResult?.unsupported || 0} unsupported.\n`
           }

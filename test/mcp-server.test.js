@@ -146,4 +146,122 @@ describe("PreFlight MCP server tools", () => {
       content: [{ type: "text", text: "PreFlight remediation attempted 2 fix(es): 1 applied, 1 skipped, 0 unsupported.\n" }]
     });
   });
+
+  test("preflight_fix includes the beta license receipt before the remediation summary", async () => {
+    const { registerMcpTools } = require("../src/mcp/server");
+    const registered = [];
+    const fakeServer = {
+      registerTool(name, definition, handler) {
+        registered.push({ name, definition, handler });
+      }
+    };
+
+    registerMcpTools(fakeServer, {
+      applyScanFixes: async () => ({ attempted: 1, applied: 1, skipped: 0, unsupported: 0 }),
+      auditDependencies: async () => ({ vulnerabilities: { total: 0 }, metadata: {} }),
+      cwd: process.cwd(),
+      loadPreflightPolicy: async () => ({}),
+      recordFreeFixUsage: async () => {},
+      renderAuditReport: () => "audit report\n",
+      renderReport: () => "scan report\n",
+      scanProject: async () => [{ ruleId: "frontend-secret", fix: { kind: "credential" } }],
+      scanProjectDiff: async () => [],
+      verifyFixPermission: async () => ({
+        allowed: true,
+        tier: "pro",
+        receipt: "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes (Expires 14 days from issue date)."
+      })
+    });
+
+    const fixTool = registered.find((tool) => tool.name === "preflight_fix");
+    const result = await fixTool.handler({ directory: ".", diff: false });
+
+    expect(result).toEqual({
+      content: [
+        {
+          type: "text",
+          text:
+            "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes (Expires 14 days from issue date).\n" +
+            "PreFlight remediation attempted 1 fix(es): 1 applied, 0 skipped, 0 unsupported.\n"
+        }
+      ]
+    });
+  });
+
+  test("preflight_fix passes the active rootDir into applyScanFixes for deep patch path resolution", async () => {
+    const { registerMcpTools } = require("../src/mcp/server");
+    const path = require("node:path");
+    const registered = [];
+    const fakeServer = {
+      registerTool(name, definition, handler) {
+        registered.push({ name, definition, handler });
+      }
+    };
+    const cwd = path.join(process.cwd(), "workspace-root");
+    let receivedOptions = null;
+
+    registerMcpTools(fakeServer, {
+      applyScanFixes: async (_findings, options) => {
+        receivedOptions = options;
+        return { attempted: 1, applied: 1, skipped: 0, unsupported: 0 };
+      },
+      auditDependencies: async () => ({ vulnerabilities: { total: 0 }, metadata: {} }),
+      cwd,
+      loadPreflightPolicy: async () => ({}),
+      recordFreeFixUsage: async () => {},
+      renderAuditReport: () => "audit report\n",
+      renderReport: () => "scan report\n",
+      scanProject: async () => [{ ruleId: "llm-reasoning", patchSet: { patches: [] } }],
+      scanProjectDiff: async () => [],
+      verifyFixPermission: async () => ({ allowed: true, tier: "pro" })
+    });
+
+    const fixTool = registered.find((tool) => tool.name === "preflight_fix");
+    await fixTool.handler({ directory: "nested/project", diff: false });
+
+    expect(receivedOptions).toMatchObject({
+      rootDir: path.resolve(cwd, "nested/project")
+    });
+    expect(typeof receivedOptions.ask).toBe("function");
+  });
+
+  test("MCP tools load policy from the active project root instead of the server cwd", async () => {
+    const { registerMcpTools } = require("../src/mcp/server");
+    const path = require("node:path");
+    const registered = [];
+    const fakeServer = {
+      registerTool(name, definition, handler) {
+        registered.push({ name, definition, handler });
+      }
+    };
+    const cwd = path.join(process.cwd(), "workspace-root");
+    const policyRoots = [];
+
+    registerMcpTools(fakeServer, {
+      applyScanFixes: async () => ({ attempted: 0, applied: 0, skipped: 0, unsupported: 0 }),
+      auditDependencies: async () => ({ vulnerabilities: { total: 0 }, metadata: {} }),
+      cwd,
+      loadPreflightPolicy: async (policyRoot) => {
+        policyRoots.push(policyRoot);
+        return {};
+      },
+      recordFreeFixUsage: async () => {},
+      renderAuditReport: () => "audit report\n",
+      renderReport: () => "scan report\n",
+      scanProject: async () => [],
+      scanProjectDiff: async () => [],
+      verifyFixPermission: async () => ({ allowed: true, tier: "pro" })
+    });
+
+    const scanTool = registered.find((tool) => tool.name === "scan_project");
+    const fixTool = registered.find((tool) => tool.name === "preflight_fix");
+
+    await scanTool.handler({ directory: "nested/project", diff: false, format: "text" });
+    await fixTool.handler({ directory: "nested/project", diff: false });
+
+    expect(policyRoots).toEqual([
+      path.resolve(cwd, "nested/project"),
+      path.resolve(cwd, "nested/project")
+    ]);
+  });
 });

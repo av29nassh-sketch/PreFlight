@@ -238,46 +238,29 @@ describe("PreFlight core modular architecture", () => {
 
     expect(payload.diff).toBe(diff);
     expect(payload.requestedAction).toBe("manual-qa");
-    expect(prepared.headers.Authorization).toBe("Bearer pf_pro_test_license_key");
+    expect(prepared.headers["X-PreFlight-Pro-Key"]).toBe("pf_pro_test_license_key");
     expect(prepared.logSafeSummary).not.toContain("pf_pro_test_license_key");
     expect(prepared.payload.requestedAction).toBe("auto-heal");
   });
 
-  test("cloud fallback sends diff through SDK when local hardware cannot run", async () => {
-    const {
-      analyzeDiffWithCloud,
-      PREFLIGHT_SYSTEM_PROMPT
-    } = require("../src/router/cloud");
+  test("cloud fallback sends diff through the PreFlight Pro proxy when local hardware cannot run", async () => {
+    const { PREFLIGHT_SYSTEM_PROMPT, analyzeDiffWithCloud } = require("../src/router/cloud");
     const requests = [];
-    const fakeClient = {
-      chat: {
-        completions: {
-          create: async (request) => {
-            requests.push(request);
-            return {
-              choices: [
-                {
-                  message: {
-                    content: JSON.stringify({
-                      state: "YELLOW",
-                      reasoning: "Tenant isolation spans multiple files and cannot be proven from this diff alone.",
-                      manual_qa_line: "Create two tenants locally and confirm user A cannot read user B records.",
-                      auto_patch: null
-                    })
-                  }
-                }
-              ]
-            };
-          }
-        }
-      }
-    };
 
     const result = await analyzeDiffWithCloud("+await client.rpc('tenant_lookup')", {
-      apiKey: "pf_cloud_test_key",
+      licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
       canRunLocal: false,
-      client: fakeClient,
-      model: "test-model"
+      transport: async (request) => {
+        requests.push(request);
+        return {
+          verdict: {
+            state: "YELLOW",
+            reasoning: "Tenant isolation spans multiple files and cannot be proven from this diff alone.",
+            manual_qa_line: "Create two tenants locally and confirm user A cannot read user B records.",
+            auto_patch: null
+          }
+        };
+      }
     });
 
     expect(result.routed).toBe("cloud");
@@ -287,16 +270,35 @@ describe("PreFlight core modular architecture", () => {
       manual_qa_line: "Create two tenants locally and confirm user A cannot read user B records.",
       auto_patch: null
     });
-    expect(requests[0]).toMatchObject({
-      model: "test-model",
-      response_format: { type: "json_object" },
-      temperature: 0
+    expect(requests[0].headers["X-PreFlight-Pro-Key"]).toBe("PREFLIGHT-BETA-20260610-TEST1");
+    expect(requests[0].payload.system).toBe(PREFLIGHT_SYSTEM_PROMPT);
+    expect(requests[0].payload.messages[0].content).toContain("+await client.rpc('tenant_lookup')");
+  });
+
+  test("cloud fallback validates proxy verdict responses without requiring AI provider keys", async () => {
+    const { callCloudDiffAnalyzer } = require("../src/router/cloud");
+    const requests = [];
+
+    const verdict = await callCloudDiffAnalyzer("+const ok = true;", {
+      licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
+      transport: async (request) => {
+        requests.push(request);
+        return {
+          state: "GREEN",
+          reasoning: "No cross-tenant boundary regression detected in this reduced diff.",
+          manual_qa_line: null,
+          auto_patch: null
+        };
+      }
     });
-    expect(requests[0].messages[0]).toEqual({
-      role: "system",
-      content: PREFLIGHT_SYSTEM_PROMPT
+
+    expect(verdict).toEqual({
+      state: "GREEN",
+      reasoning: "No cross-tenant boundary regression detected in this reduced diff.",
+      manual_qa_line: null,
+      auto_patch: null
     });
-    expect(requests[0].messages[1].content).toContain("+await client.rpc('tenant_lookup')");
+    expect(requests[0].headers["X-PreFlight-Pro-Key"]).toBe("PREFLIGHT-BETA-20260610-TEST1");
   });
 
   test("cloud fallback skips SDK calls when local hardware can run", async () => {
@@ -322,25 +324,37 @@ describe("PreFlight core modular architecture", () => {
     });
   });
 
-  test("cloud fallback rejects malformed model JSON", async () => {
-    const { analyzeDiffWithCloud } = require("../src/router/cloud");
-    const fakeClient = {
-      chat: {
-        completions: {
-          create: async () => ({
-            choices: [{ message: { content: "{\"state\":\"RED\",\"reasoning\":\"Missing fields\"}" } }]
-          })
-        }
-      }
-    };
+  test("cloud fallback surfaces the unified Pro engine error when the proxy response is malformed", async () => {
+    const { PRO_ENGINE_CONNECTION_ERROR, analyzeDiffWithCloud } = require("../src/router/cloud");
 
     await expect(
       analyzeDiffWithCloud("+const unsafe = true;", {
-        apiKey: "pf_cloud_test_key",
+        licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
         canRunLocal: false,
-        client: fakeClient
+        transport: async () => ({
+          state: "RED",
+          reasoning: "Missing fields"
+        })
       })
-    ).rejects.toThrow("Cloud verdict must include manual_qa_line");
+    ).rejects.toThrow(PRO_ENGINE_CONNECTION_ERROR);
+  });
+
+  test("parseJsonObject tolerates fenced JSON wrapped in extra text", () => {
+    const { parseJsonObject } = require("../src/router/cloud");
+
+    expect(
+      parseJsonObject([
+        "Root Cause: Wrapped response",
+        "```json",
+        "{\"state\":\"GREEN\",\"reasoning\":\"Safe.\",\"manual_qa_line\":null,\"auto_patch\":null}",
+        "```"
+      ].join("\n"))
+    ).toEqual({
+      state: "GREEN",
+      reasoning: "Safe.",
+      manual_qa_line: null,
+      auto_patch: null
+    });
   });
 
   test("micro-router defaults to local Ollama-compatible provider without requiring a cloud key", () => {
@@ -355,40 +369,30 @@ describe("PreFlight core modular architecture", () => {
     });
   });
 
-  test("micro-router prefers OpenRouter when its free API key is configured", () => {
+  test("micro-router ignores AI provider keys and stays on the local keyless path", () => {
     const { resolveMicroRouterProvider } = require("../src/router/cloud");
 
     expect(resolveMicroRouterProvider({
       OPENROUTER_API_KEY: "openrouter-key",
       PREFLIGHT_MICRO_MODEL: "qwen/qwen3-coder:free"
     })).toEqual({
-      apiKey: "openrouter-key",
-      baseURL: "https://openrouter.ai/api/v1",
+      apiKey: "ollama",
+      baseURL: "http://localhost:11434/v1",
       model: "qwen/qwen3-coder:free",
-      provider: "openrouter",
+      provider: "ollama",
       timeoutMs: 5000
     });
   });
 
-  test("reasoning engine refuses Claude Sonnet without an OpenAI-compatible gateway URL", () => {
-    const { resolveReasoningEngineProvider } = require("../src/router/cloud");
-
-    expect(() => resolveReasoningEngineProvider({
-      PREFLIGHT_REASONING_API_KEY: "reasoning-key"
-    })).toThrow("Claude reasoning models require PREFLIGHT_REASONING_BASE_URL");
-  });
-
-  test("reasoning engine routes Claude Sonnet through a configured gateway URL", () => {
+  test("reasoning engine resolves to the PreFlight Pro proxy configuration", () => {
     const { resolveReasoningEngineProvider } = require("../src/router/cloud");
 
     expect(resolveReasoningEngineProvider({
-      PREFLIGHT_REASONING_API_KEY: "reasoning-key",
-      PREFLIGHT_REASONING_BASE_URL: "https://openrouter.ai/api/v1"
+      PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260610-TEST1"
     })).toEqual({
-      apiKey: "reasoning-key",
-      baseURL: "https://openrouter.ai/api/v1",
-      model: "claude-3-5-sonnet-20241022",
-      provider: "reasoning-cloud",
+      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediate",
+      licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
+      provider: "preflight-proxy",
       timeoutMs: 30000
     });
   });
@@ -557,43 +561,27 @@ describe("PreFlight core modular architecture", () => {
     expect(requests[0].requestOptions).toEqual({ timeout: 30000 });
   });
 
-  test("ReasoningEngine uses the strict patch-set prompt and parses model JSON", async () => {
-    const {
-      REASONING_ENGINE_SYSTEM_PROMPT,
-      ReasoningEngine
-    } = require("../src/router/cloud");
+  test("ReasoningEngine sends deep remediation through the PreFlight Pro proxy", async () => {
+    const { REASONING_ENGINE_SYSTEM_PROMPT, ReasoningEngine } = require("../src/router/cloud");
     const requests = [];
     const engine = new ReasoningEngine({
-      client: {
-        chat: {
-          completions: {
-            create: async (request, requestOptions) => {
-              requests.push({ request, requestOptions });
-              return {
-                choices: [
-                  {
-                    message: {
-                      content: JSON.stringify({
-                        patches: [
-                          {
-                            file_path: "middleware.ts",
-                            action: "update",
-                            new_content: "export default withAuth(middleware);\n"
-                          }
-                        ],
-                        explanation: "Restore auth middleware and verify protected routes return 403."
-                      })
-                    }
-                  }
-                ]
-              };
-            }
-          }
-        }
+      env: {
+        PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260610-TEST1"
       },
-      env: {},
-      model: "reasoning-test",
-      timeoutMs: 12345
+      timeoutMs: 12345,
+      transport: async (request) => {
+        requests.push(request);
+        return {
+          patches: [
+            {
+              file_path: "middleware.ts",
+              action: "update",
+              new_content: "export default withAuth(middleware);\n"
+            }
+          ],
+          explanation: "Restore auth middleware and verify protected routes return 403."
+        };
+      }
     });
 
     const patchSet = await engine.generatePatchSet({
@@ -611,36 +599,207 @@ describe("PreFlight core modular architecture", () => {
       ],
       explanation: "Restore auth middleware and verify protected routes return 403."
     });
-    expect(requests[0].request.messages[0]).toEqual({
-      role: "system",
-      content: REASONING_ENGINE_SYSTEM_PROMPT
+    expect(requests[0].headers["X-PreFlight-Pro-Key"]).toBe("PREFLIGHT-BETA-20260610-TEST1");
+    expect(requests[0].payload.system).toBe(REASONING_ENGINE_SYSTEM_PROMPT);
+    expect(requests[0].payload.messages[0].content).toContain("middleware.ts");
+  });
+
+  test("requestCloudScan parses direct proxy responses even when a transport function is supplied", async () => {
+    const { requestCloudScan } = require("../src/router/cloud");
+
+    const result = await requestCloudScan("diff --git a/app/page.tsx b/app/page.tsx\n+++ b/app/page.tsx", {
+      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediate",
+      licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
+      mode: "auto-heal",
+      transport: async () => ({
+        content: [
+          {
+            text: "```json\n{\"patches\":[{\"file_path\":\"app/page.tsx\",\"action\":\"update\",\"new_content\":\"export default function Page() { return null; }\\n\"}],\"explanation\":\"Restore the safe page boundary.\"}\n```"
+          }
+        ]
+      })
     });
-    expect(requests[0].request.messages[1].content).toContain("unified_diff");
-    expect(requests[0].request.messages[1].content).toContain("middleware.ts");
-    expect(requests[0].request.response_format).toEqual({ type: "json_object" });
-    expect(requests[0].requestOptions).toEqual({ timeout: 12345 });
+
+    expect(result).toEqual({
+      patches: [
+        {
+          file_path: "app/page.tsx",
+          action: "update",
+          new_content: "export default function Page() { return null; }\n"
+        }
+      ],
+      explanation: "Restore the safe page boundary."
+    });
+  });
+
+  test("applyScanFixes treats llm-reasoning patch sets as supported deep fixes", async () => {
+    const { applyScanFixes } = require("../index");
+    const root = makeProject({
+      "app/api/tenant-sync/route.ts": "export async function POST() { return Response.json({ ok: true }); }\n"
+    });
+    const prompts = [];
+    const output = { text: "", write(chunk) { this.text += String(chunk); } };
+
+    const result = await applyScanFixes([
+      {
+        ruleId: "llm-reasoning",
+        severity: "critical",
+        filePath: path.join(root, "app/api/tenant-sync/route.ts"),
+        patchSet: {
+          patches: [
+            {
+              filePath: "app/api/tenant-sync/route.ts",
+              action: "update",
+              newContent: "export const POST = withTenantGuard(handler);\n"
+            }
+          ],
+          explanation: "Restore the tenant guard before forwarding tenant-scoped writes."
+        }
+      }
+    ], {
+      ask: async (question) => {
+        prompts.push(question);
+        return "y";
+      },
+      output,
+      rootDir: root
+    });
+
+    expect(result).toEqual({ attempted: 1, applied: 1, skipped: 0, unsupported: 0 });
+    expect(prompts).toEqual(["Apply this deep reasoning fix? (y/N): "]);
+    expect(output.text).toContain("Deep Multi-File Remediation");
+    expect(output.text).toMatch(/app[\\/]api[\\/]tenant-sync[\\/]route\.ts/);
+    expect(fs.readFileSync(path.join(root, "app/api/tenant-sync/route.ts"), "utf8")).toBe(
+      "export const POST = withTenantGuard(handler);\n"
+    );
+  });
+
+  test("applyScanFixes blocks deep patches that would overwrite a file already fixed in the same run", async () => {
+    const { applyScanFixes } = require("../index");
+    const original = "const secret = \"sk_test_123\";\n";
+    const replacement = "const secret = process.env.STRIPE_SECRET_KEY;\n";
+    const root = makeProject({
+      "app/api/tenant-sync/route.ts": original
+    });
+    const prompts = [];
+    const output = { text: "", write(chunk) { this.text += String(chunk); } };
+
+    const result = await applyScanFixes([
+      {
+        ruleId: "frontend-secret",
+        severity: "critical",
+        filePath: path.join(root, "app/api/tenant-sync/route.ts"),
+        fix: {
+          kind: "credential",
+          startByte: 0,
+          endByte: Buffer.byteLength(original, "utf8"),
+          expectedText: original,
+          replacement
+        }
+      },
+      {
+        ruleId: "llm-reasoning",
+        severity: "critical",
+        filePath: path.join(root, "app/api/tenant-sync/route.ts"),
+        patchSet: {
+          patches: [
+            {
+              filePath: "app/api/tenant-sync/route.ts",
+              action: "update",
+              newContent: "export const POST = withTenantGuard(handler);\n"
+            }
+          ],
+          explanation: "Restore the tenant guard before forwarding tenant-scoped writes."
+        }
+      }
+    ], {
+      ask: async (question) => {
+        prompts.push(question);
+        return "y";
+      },
+      output,
+      rootDir: root
+    });
+
+    expect(result).toEqual({ attempted: 1, applied: 1, skipped: 0, unsupported: 1 });
+    expect(prompts).toEqual(["\nApply this fix? (y/N): "]);
+    expect(output.text).toContain("Skipping deep patch for");
+    expect(output.text).toMatch(/app[\\/]api[\\/]tenant-sync[\\/]route\.ts/);
+    expect(fs.readFileSync(path.join(root, "app/api/tenant-sync/route.ts"), "utf8")).toBe(replacement);
+  });
+
+  test("applyScanFixes blocks a second deep patch from overwriting an earlier deep patch in the same run", async () => {
+    const { applyScanFixes } = require("../index");
+    const root = makeProject({
+      "app/api/tenant-sync/route.ts": "export async function POST() { return Response.json({ ok: true }); }\n"
+    });
+    const prompts = [];
+    const output = { text: "", write(chunk) { this.text += String(chunk); } };
+
+    const result = await applyScanFixes([
+      {
+        ruleId: "llm-reasoning",
+        severity: "critical",
+        filePath: path.join(root, "app/api/tenant-sync/route.ts"),
+        patchSet: {
+          patches: [
+            {
+              filePath: "app/api/tenant-sync/route.ts",
+              action: "update",
+              newContent: "export const POST = withTenantGuard(handler);\n"
+            }
+          ],
+          explanation: "Apply the first deep patch."
+        }
+      },
+      {
+        ruleId: "llm-reasoning",
+        severity: "critical",
+        filePath: path.join(root, "app/api/tenant-sync/route.ts"),
+        patchSet: {
+          patches: [
+            {
+              filePath: "app/api/tenant-sync/route.ts",
+              action: "update",
+              newContent: "export const POST = insecureHandler;\n"
+            }
+          ],
+          explanation: "This second deep patch should be blocked."
+        }
+      }
+    ], {
+      ask: async (question) => {
+        prompts.push(question);
+        return "y";
+      },
+      output,
+      rootDir: root
+    });
+
+    expect(result).toEqual({ attempted: 1, applied: 1, skipped: 0, unsupported: 1 });
+    expect(prompts).toEqual(["Apply this deep reasoning fix? (y/N): "]);
+    expect(output.text).toContain("Skipping deep patch for");
+    expect(output.text).toMatch(/app[\\/]api[\\/]tenant-sync[\\/]route\.ts/);
+    expect(fs.readFileSync(path.join(root, "app/api/tenant-sync/route.ts"), "utf8")).toBe(
+      "export const POST = withTenantGuard(handler);\n"
+    );
   });
 
   test("ReasoningEngine converts backend 402 responses into a paywall interceptor error", async () => {
     const {
       PreFlightPaymentRequiredError,
-      PAYWALL_UPGRADE_MESSAGE,
+      PRO_ENGINE_CONNECTION_ERROR,
       ReasoningEngine
     } = require("../src/router/cloud");
     const engine = new ReasoningEngine({
-      client: {
-        chat: {
-          completions: {
-            create: async () => {
-              const error = new Error("Payment Required");
-              error.status = 402;
-              throw error;
-            }
-          }
-        }
+      env: {
+        PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260610-TEST1"
       },
-      env: {},
-      model: "reasoning-test"
+      transport: async () => {
+        const error = new Error("Payment Required");
+        error.status = 402;
+        throw error;
+      }
     });
 
     await expect(engine.generatePatchSet({
@@ -652,7 +811,7 @@ describe("PreFlight core modular architecture", () => {
       files: []
     })).rejects.toMatchObject({
       status: 402,
-      message: PAYWALL_UPGRADE_MESSAGE
+      message: PRO_ENGINE_CONNECTION_ERROR
     });
   });
 
@@ -663,23 +822,10 @@ describe("PreFlight core modular architecture", () => {
       ReasoningEngine
     } = require("../src/router/cloud");
     const engine = new ReasoningEngine({
-      client: {
-        chat: {
-          completions: {
-            create: async () => ({
-              choices: [
-                {
-                  message: {
-                    content: "  MANUAL_REVIEW_REQUIRED  "
-                  }
-                }
-              ]
-            })
-          }
-        }
+      env: {
+        PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260610-TEST1"
       },
-      env: {},
-      model: "reasoning-test"
+      transport: async () => "  MANUAL_REVIEW_REQUIRED  "
     });
 
     await expect(engine.generatePatchSet({

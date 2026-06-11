@@ -7,7 +7,7 @@ import { prisma } from "../../../../lib/prisma";
 export const runtime = "nodejs";
 
 const CLAUDE_REMEDIATION_MODEL =
-  process.env.PREFLIGHT_ANTHROPIC_MODEL || "claude-3-5-sonnet-20241022";
+  process.env.PREFLIGHT_ANTHROPIC_MODEL || "claude-sonnet-4-6";
 
 const PREFLIGHT_SYSTEM_PROMPT =
   "You are the automated remediation engine for 'PreFlight', a local-first developer security CLI. Your sole purpose is to receive vulnerable code snippets and return the exact, fully patched, production-ready secure code. CRITICAL INSTRUCTIONS: 1. NO CONVERSATIONAL TEXT. 2. NO MARKDOWN (do not use ```javascript). Output ONLY the raw text. 3. PRESERVE LOGIC & FORMATTING exactly. Modify only the lines required for the fix. 4. If the fix is too ambiguous or risky, output exactly and only: MANUAL_REVIEW_REQUIRED.";
