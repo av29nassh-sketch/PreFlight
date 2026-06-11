@@ -85,7 +85,7 @@ describe("remediationEngine", () => {
       ],
       temperature: 0
     });
-    expect(logs[0]).toContain("[PRO] Claude fix generated. Tokens used: 18 (Prompt: 11, Completion: 7)");
+    expect(logs[0]).toContain("[PRO] Pro Engine fix generated. Tokens used: 18 (Prompt: 11, Completion: 7)");
   });
 
   test("verifySyntaxSafety accepts parseable fragments and rejects ERROR nodes", async () => {

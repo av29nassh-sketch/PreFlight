@@ -225,7 +225,7 @@ async function main() {
   const astCleanedCode = runLocalASTFixes(sourceCode);
 
   console.log("✅ [LOCAL] AST Syntax Pass Complete");
-  console.log("→ [ENGINE] Claude Engine Call Starting");
+  console.log("→ [ENGINE] Pro Engine Call Starting");
 
   let rawResponse = "";
   let parsed: { explanation: string; code: string } | null = null;
@@ -248,7 +248,7 @@ async function main() {
 
       if (attempt === 1) {
         console.log("❌ [ENGINE FAILURE] Model returned invalid code. Retrying...");
-        console.log("→ [ENGINE] Claude Engine Retry Starting");
+        console.log("→ [ENGINE] Pro Engine Retry Starting");
         continue;
       }
 
@@ -258,7 +258,7 @@ async function main() {
     } catch (error) {
       if (attempt === 1) {
         console.log("❌ [ENGINE FAILURE] Model returned invalid code. Retrying...");
-        console.log("→ [ENGINE] Claude Engine Retry Starting");
+        console.log("→ [ENGINE] Pro Engine Retry Starting");
         continue;
       }
 
@@ -271,7 +271,7 @@ async function main() {
   }
 
   if (!parsed) {
-    throw new Error("Claude Engine did not return a valid remediation.");
+    throw new Error("Pro Engine did not return a valid remediation.");
   }
 
   const totalSeconds = ((performance.now() - startedAt) / 1000).toFixed(2);

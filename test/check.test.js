@@ -638,7 +638,7 @@ describe("PreFlight Check", () => {
         "export async function POST(req: NextRequest) {",
         "  const data = await req.json();",
         "",
-        "  // FLAW 1: Claude confidently inlined the production token",
+        "  // FLAW 1: the assistant confidently inlined the production token",
         "  const STRIPE_SECRET = \"" + STRIPE_KEY + "\";",
         "",
         "  // FLAW 2: AI used the master service_role client to fetch user data blindly",

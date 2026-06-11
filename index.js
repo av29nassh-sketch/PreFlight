@@ -986,7 +986,7 @@ async function applyAstCredentialRemediation(findings, options = {}) {
   ]);
   let mutatedSource = mutatedBytes.toString("utf8");
   mutatedSource = mutatedSource.replace(
-    "// Bug: Claude confidently inlined the live production token",
+    "// Bug: the assistant confidently inlined the live production token",
     "// Fix: Safely swapped the VariableDeclarator value node cleanly"
   );
   const injected = injectDotenvImport(mutatedSource);
@@ -3140,7 +3140,7 @@ function renderFixPhaseBanner(phase) {
   }
 
   if (phase === "pro") {
-    return "🚀 [PHASE 2] Handing Off Remaining Architectural Flaws to Claude Deep Reasoning Engine...\n";
+    return "🚀 [PHASE 2] Handing Off Remaining Architectural Flaws to PreFlight Pro Deep Reasoning Engine...\n";
   }
 
   return "";
@@ -3251,7 +3251,7 @@ function renderFixPreviewHeading(filePath, node) {
   }
 
   if (node?.kind === "sql-remediation") {
-    return `\n[PRO] SQL fix generated via Claude for ${filePath}\n`;
+    return `\n[PRO] SQL fix generated via Pro Engine for ${filePath}\n`;
   }
 
   return `\n[PREFLIGHT] Fix available in ${filePath}\n`;

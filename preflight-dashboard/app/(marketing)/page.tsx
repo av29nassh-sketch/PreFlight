@@ -2,55 +2,85 @@ export const dynamic = "force-dynamic";
 
 const terminalLines = [
   { tone: "muted", text: "$ preflight scan --fix" },
-  { tone: "warn", text: "HIGH-RISK DRIFT detected in app/api/billing/route.ts" },
-  { tone: "muted", text: "-> Sending complex remediation context to Claude 3.5 Sonnet..." },
-  { tone: "bad", text: "- const polar = new Polar({ accessToken: 'polar_live_...' })" },
-  { tone: "good", text: "+ const polar = new Polar({ accessToken: process.env.POLAR_ACCESS_TOKEN! })" },
-  { tone: "good", text: "Patched unsafe secret handling without changing route behavior" },
-  { tone: "muted", text: "PreFlight remediation attempted 1 fix: 1 applied, 0 skipped" }
+  { tone: "muted", text: "🔍 [PHASE 1] Running Offline Local AST Optimization Pass..." },
+  { tone: "good", text: "[LOCAL] AST scaffold applied for app/Dashboard.tsx" },
+  { tone: "muted", text: "🚀 [PHASE 2] Handing Off Remaining Architectural Flaws to PreFlight Pro Deep Reasoning Engine..." },
+  { tone: "warn", text: "[PRO] SQL fix generated via Pro Engine for lib/db.ts" },
+  { tone: "bad", text: '- "SELECT * FROM users WHERE id = " + userId' },
+  { tone: "good", text: '+ ({ text: "SELECT * FROM users WHERE id = $1", values: [userId] })' },
+  { tone: "good", text: "Deep multi-file patch prepared for tenant-sync boundary" }
 ];
 
-const proofCards = [
+const architectureCards = [
   {
-    eyebrow: "Local-first gate",
-    title: "Stops AI drift before commit",
-    copy: "Run read-only scans locally, then opt into reviewed auto-heal only when you ask for it."
+    eyebrow: "Phase 1",
+    title: "Local AST Layer",
+    copy: "Instant, private, offline structural checks for credential leaks, server-only imports, and fast AST-safe updates.",
+    bullets: ["Runs fully offline", "Immediate structural fixes", "No source upload during the local pass"]
   },
   {
-    eyebrow: "Claude remediation",
-    title: "Deep fixes for risky logic",
-    copy: "Complex auth, billing, webhook, and tenant-boundary fixes route through the cloud only when local AST proof surrenders."
+    eyebrow: "Phase 2",
+    title: "PreFlight Pro Deep Reasoning Engine",
+    copy: "Secure proxy-brokered architectural overhauls for the flaws the local AST pass cannot safely resolve on its own.",
+    bullets: ["Multi-file vulnerability patching", "Parametric SQL injection fixes", "Auth, billing, tenant, webhook reasoning"]
   },
   {
-    eyebrow: "Governance ready",
-    title: "Telemetry for teams",
-    copy: "Track intercepted red and yellow findings across CLI, CI, and MCP loops from the dashboard."
+    eyebrow: "Free vs Pro",
+    title: "Pay for deeper reasoning, not basic safety",
+    copy: "The free engine handles offline AST scanning and standard structural remediations. Pro unlocks the premium Deep Reasoning Pipeline.",
+    bullets: ["Free CLI remains useful by itself", "Pro extends, not replaces, the local engine", "Invite-only beta onboarding today"]
   }
 ];
 
 const pricing = [
   {
-    name: "Free",
-    description: "Start with the open product surface while the hosted beta stays invite-only.",
-    features: ["Local AST scan", "Interactive fix prompts", "No source upload for local checks", "Open-source starter flow"],
+    name: "Free Tier",
+    price: "$0",
+    billing: "Forever free",
+    description: "For developers who want a private local gate before AI-generated code lands in production.",
+    features: ["Core AST scanning", "Offline credential leak detection", "Standard single-file syntax fixes", "Open-source CLI workflow"],
     cta: "View free version",
     href: "https://github.com/av29nassh-sketch/PreFlight",
-    muted: true
+    accent: "border-zinc-800 bg-zinc-900/55"
   },
   {
-    name: "Private Beta",
-    description: "For founders and vibecoders who will actively test PreFlight on real projects for the next two weeks.",
-    features: ["14-day full-access beta", "Unlimited deep-logic remediation", "CLI login", "Direct feedback loop with the product"],
-    cta: "Apply for beta",
+    name: "Solo Founders",
+    price: "$19/month",
+    billing: "Per founder / developer",
+    description: "For solo builders who want the premium Pro Engine path for SQL, auth, billing, and multi-file remediation.",
+    features: ["Full PreFlight Pro reasoning integration", "Secure proxy token management", "Multi-file dependency patching", "Invite-only beta access"],
+    cta: "Apply for Solo Beta",
     href: "https://waitlister.me/p/preflight",
     featured: true
   },
   {
-    name: "Teams Waitlist",
-    description: "For engineering teams that want policy, telemetry, and shared rollout once the beta expands.",
-    features: ["Org repository enforcement", "Team telemetry dashboard", "CI and MCP governance", "Priority access when team onboarding opens"],
-    cta: "Join waitlist",
-    href: "https://waitlister.me/p/preflight"
+    name: "Teams",
+    price: "$49/seat/month",
+    billing: "Per seat, per month",
+    description: "For engineering teams that need shared rollout, policy alignment, and premium support on top of the Pro engine.",
+    features: ["Pro Engine reasoning for every seat", "Shared onboarding and rollout", "Prioritized support", "Team beta waitlist"],
+    cta: "Join Teams Waitlist",
+    href: "https://waitlister.me/p/preflight",
+    accent: "border-zinc-800 bg-zinc-900/55"
+  }
+];
+
+const quickStartBlocks = [
+  {
+    label: "PowerShell",
+    lines: [
+      '$env:X_PREFLIGHT_PRO_KEY="YOUR_BETA_KEY"',
+      "$env:PREFLIGHT_PRO_KEY=$env:X_PREFLIGHT_PRO_KEY",
+      "node ./index.js scan ./path-to-code --fix"
+    ]
+  },
+  {
+    label: "Bash / macOS",
+    lines: [
+      'export X_PREFLIGHT_PRO_KEY="YOUR_BETA_KEY"',
+      'export PREFLIGHT_PRO_KEY="$X_PREFLIGHT_PRO_KEY"',
+      "node ./index.js scan ./path-to-code --fix"
+    ]
   }
 ];
 
@@ -109,7 +139,7 @@ export default function MarketingPage() {
             PreFlight: Real-time AI security remediation right in your CLI.
           </h1>
           <p className="mt-6 max-w-2xl text-lg leading-8 text-zinc-300">
-            Catch unsafe AI-generated auth, billing, RLS, webhook, SSRF, and secret-handling changes before they hit production. Local AST proof first. Claude remediation only when the fix needs deeper context.
+            Catch unsafe AI-generated auth, billing, RLS, webhook, SSRF, and secret-handling changes before they hit production. Free gives you the offline AST safety layer. PreFlight Pro unlocks the premium Deep Reasoning Pipeline when the fix needs deeper architectural context.
           </p>
           <div className="mt-8 flex flex-col gap-3 sm:flex-row">
             <a className="inline-flex h-12 items-center justify-center rounded-md bg-emerald-300 px-5 text-sm font-semibold text-zinc-950 hover:bg-emerald-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-300 active:translate-y-px" href="#pricing">
@@ -120,7 +150,7 @@ export default function MarketingPage() {
             </a>
           </div>
           <div className="mt-8 grid max-w-2xl grid-cols-3 gap-3 text-sm">
-            {["AST proof", "Private beta", "Direct feedback"].map((item) => (
+            {["Offline first", "Solo $19/month", "Invite-only beta"].map((item) => (
               <div className="rounded-md border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-zinc-300" key={item}>
                 {item}
               </div>
@@ -135,11 +165,19 @@ export default function MarketingPage() {
 
       <section className="relative z-10 border-y border-zinc-800/80 bg-zinc-950/80">
         <div className="mx-auto grid max-w-7xl gap-4 px-6 py-10 md:grid-cols-3">
-          {proofCards.map((card) => (
+          {architectureCards.map((card) => (
             <article className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-5" key={card.title}>
               <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300">{card.eyebrow}</div>
               <h2 className="mt-4 text-xl font-semibold text-zinc-50">{card.title}</h2>
               <p className="mt-3 text-sm leading-6 text-zinc-400">{card.copy}</p>
+              <ul className="mt-4 space-y-2 text-sm text-zinc-300">
+                {card.bullets.map((bullet) => (
+                  <li className="flex gap-3" key={bullet}>
+                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-emerald-300" />
+                    <span>{bullet}</span>
+                  </li>
+                ))}
+              </ul>
             </article>
           ))}
         </div>
@@ -147,10 +185,10 @@ export default function MarketingPage() {
 
       <section className="relative z-10 mx-auto max-w-7xl px-6 py-16" id="pricing">
         <div className="max-w-2xl">
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Beta Access</div>
-          <h2 className="mt-4 text-4xl font-semibold text-zinc-50">Public checkout is paused while PreFlight runs a small private beta.</h2>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Pricing</div>
+          <h2 className="mt-4 text-4xl font-semibold text-zinc-50">Choose the path that matches your remediation depth: free local AST, solo Pro, or team rollout.</h2>
           <p className="mt-4 text-base leading-7 text-zinc-400">
-            I am onboarding 5-10 serious testers manually for a 14-day run. If you want hosted access, apply for beta and I will reach out if it is a fit.
+            The free CLI stays useful on its own. Paid plans unlock the Deep Reasoning layer, secure proxy-backed fixes, and higher-touch onboarding. During beta, Solo and Teams access both start through the waitlist.
           </p>
         </div>
 
@@ -160,18 +198,22 @@ export default function MarketingPage() {
               className={
                 plan.featured
                   ? "rounded-lg border border-emerald-300/50 bg-emerald-400/[0.07] p-6 shadow-[0_25px_100px_rgba(16,185,129,0.16)]"
-                  : "rounded-lg border border-zinc-800 bg-zinc-900/55 p-6"
+                  : `rounded-lg p-6 ${plan.accent}`
               }
               key={plan.name}
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <h3 className="text-2xl font-semibold text-zinc-50">{plan.name}</h3>
+                  <div className="mt-3 flex items-end gap-3">
+                    <div className="text-4xl font-semibold tracking-tight text-zinc-50">{plan.price}</div>
+                    <div className="pb-1 text-sm text-zinc-400">{plan.billing}</div>
+                  </div>
                   <p className="mt-2 text-sm leading-6 text-zinc-400">{plan.description}</p>
                 </div>
                 {plan.featured ? (
                   <span className="rounded-md bg-emerald-300 px-2.5 py-1 text-xs font-bold uppercase tracking-[0.14em] text-zinc-950">
-                    14 days
+                    Beta
                   </span>
                 ) : null}
               </div>
@@ -195,6 +237,29 @@ export default function MarketingPage() {
               </a>
             </article>
           ))}
+        </div>
+      </section>
+
+      <section className="relative z-10 border-t border-zinc-800/80 bg-zinc-950/90">
+        <div className="mx-auto max-w-7xl px-6 py-16">
+          <div className="max-w-2xl">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Quick Start</div>
+            <h2 className="mt-4 text-4xl font-semibold text-zinc-50">Wire your issued Pro key into the terminal, then run the full `--fix` pipeline.</h2>
+            <p className="mt-4 text-base leading-7 text-zinc-400">
+              Phase 1 stays local and private. Phase 2 only kicks in for the remaining SQL and architectural flaws that need the Pro Engine.
+            </p>
+          </div>
+
+          <div className="mt-8 grid gap-5 lg:grid-cols-2">
+            {quickStartBlocks.map((block) => (
+              <article className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-5" key={block.label}>
+                <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300">{block.label}</div>
+                <pre className="mt-4 overflow-x-auto rounded-md border border-zinc-800 bg-zinc-950 p-4 text-sm leading-7 text-zinc-200">
+                  <code>{block.lines.join("\n")}</code>
+                </pre>
+              </article>
+            ))}
+          </div>
         </div>
       </section>
     </main>

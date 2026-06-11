@@ -140,7 +140,7 @@ export async function POST(req: NextRequest) {
     if (!anthropicApiKey) {
       return json(500, {
         ok: false,
-        reason: "Anthropic API key is not configured."
+        reason: "PreFlight Pro Engine backend is not configured."
       });
     }
 
