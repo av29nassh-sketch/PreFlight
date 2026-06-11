@@ -9,16 +9,25 @@ PreFlight runs in two distinct tiers depending on what your codebase needs:
 - **Setup:** Zero config. Works instantly out of the box.
 - **Commands:**
   ```bash
-  npm install -g preflight-cli
+  npm install -g preflight-guardian@beta
   preflight scan . --fix
   ```
+
+Installing `preflight-guardian@beta` exposes the universal `preflight` command in your shell.
 
 ### 🚀 Pro Tier (Deep Reasoning)
 - **What it does:** Scans and automatically fixes everything—including complex multi-file architectural flaws, tenant isolation logic, and parametric SQL injections.
 - **Setup:** Requires an active `PREFLIGHT_PRO_KEY` environment variable.
 - **Commands:**
+  ```powershell
+  # PowerShell
+  $env:PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
+  preflight scan . --fix
+  ```
+
   ```bash
-  # Set your key, then run the exact same command:
+  # Bash / macOS
+  export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
   preflight scan . --fix
   ```
 
@@ -30,13 +39,13 @@ Stop AI Coding Drift before it becomes production technical debt. PreFlight is a
 - Solo Founder Tier: `$19/month`
 - Team Tier: `$49/seat/month`
 
-## The Tri-State Risk Score Engine
+## **The Tri-State Risk Score Engine**
 
 PreFlight parses your code down to an Abstract Syntax Tree (AST) using Tree-Sitter, passing ambiguous findings through deep reasoning layers to enforce explicit architectural contracts:
 
-- Hard Block: Exposed frontend secrets, leaking database service roles, or missing Supabase Row Level Security (RLS).
-- High-Risk Drift: Structural state inconsistencies, un-idempotent webhooks, or open CORS contexts.
-- Likely Safe: Standard algorithmic changes matching your pre-defined stack rules.
+- 🔴 **Hard Block:** Exposed frontend secrets, leaking database service roles, or missing Supabase Row Level Security (RLS).
+- 🟡 **High-Risk Drift:** Structural state inconsistencies, un-idempotent webhooks, or open CORS contexts.
+- 🟢 **Likely Safe:** Standard algorithmic changes matching your pre-defined stack rules.
 
 ## 2-Phase Pipeline
 

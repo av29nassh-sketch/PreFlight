@@ -43,7 +43,7 @@ const FREE_SQL_REMEDIATION_MESSAGE = [
   "[SKIP] Skipping LLM SQL remediation for this run."
 ].join("\n");
 const ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE =
-  "Advanced remediation requires a valid PreFlight Pro activation.";
+  "⚠️ Advanced structural flaws detected. The free tier handles basic safety fixes. To unlock deep reasoning remediation and fix everything, join the invite-only beta at our website to get your PREFLIGHT_PRO_KEY.";
 const PRO_ENGINE_CONNECTION_ERROR =
   "🔴 PreFlight Pro Engine connection timed out or license invalid. Please verify your PREFLIGHT_PRO_KEY.";
 

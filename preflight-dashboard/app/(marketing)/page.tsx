@@ -13,15 +13,15 @@ const terminalLines = [
 
 const architectureCards = [
   {
-    eyebrow: "Phase 1",
-    title: "Local AST Layer",
-    copy: "Instant, private, offline structural checks for credential leaks, server-only imports, and fast AST-safe updates.",
+    eyebrow: "Free Tier",
+    title: "PreFlight Guardian",
+    copy: "Scans and automatically fixes basic security and structural issues completely offline.",
     bullets: ["Runs fully offline", "Immediate structural fixes", "No source upload during the local pass"]
   },
   {
-    eyebrow: "Phase 2",
-    title: "PreFlight Pro Deep Reasoning Engine",
-    copy: "Secure proxy-brokered architectural overhauls for the flaws the local AST pass cannot safely resolve on its own.",
+    eyebrow: "Pro Tier",
+    title: "PreFlight Pro",
+    copy: "Scans and automatically fixes everything—including complex multi-file architectural flaws, tenant isolation logic, and parametric SQL injections.",
     bullets: ["Multi-file vulnerability patching", "Parametric SQL injection fixes", "Auth, billing, tenant, webhook reasoning"]
   },
   {
@@ -70,7 +70,7 @@ const quickStartBlocks = [
     title: "1. Global Installation",
     label: "Install",
     lines: [
-      "npm install -g preflight-cli"
+      "npm install -g preflight-guardian@beta"
     ]
   },
   {

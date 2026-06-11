@@ -16,7 +16,8 @@ const { colorize, createLogger } = require("./logger");
 const {
   findSqlConcatenations,
   generateParameterizedFix: generateSqlParameterizedFix,
-  applyMultiFilePatchSet: applyDeepReasoningPatchSetDefault
+  applyMultiFilePatchSet: applyDeepReasoningPatchSetDefault,
+  ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE
 } = require("./remediationEngine");
 const {
   analyzeTaintGraph,
@@ -3134,6 +3135,14 @@ function isClaudePhaseFixFinding(item) {
   return item?.fix?.kind === "sql-remediation" || (item?.ruleId === "llm-reasoning" && item?.patchSet);
 }
 
+function hasProEngineAccess(env = process.env) {
+  return Boolean(env.PREFLIGHT_PRO_KEY || env.PREFLIGHT_PRO_LICENSE_KEY);
+}
+
+function isComplexStructuralFinding(item) {
+  return isAmbiguousAstFinding(item) || isClaudePhaseFixFinding(item);
+}
+
 function renderFixPhaseBanner(phase) {
   if (phase === "local") {
     return "🔍 [PHASE 1] Running Offline Local AST Optimization Pass...\n";
@@ -4320,45 +4329,58 @@ async function runCli(argv = process.argv, options = {}) {
           }], { policy: scanPolicy })
           : await scanProject(rootDir, { policy: scanPolicy });
 
-      let proPhaseBannerPrinted = false;
-      if (
-        findings.some(isAmbiguousAstFinding) &&
-        (forceRouteAmbiguous === true || options.routeAmbiguous === true || shouldRouteAmbiguousFindings(process.env))
-      ) {
-        output.write(renderFixPhaseBanner("pro"));
-        proPhaseBannerPrinted = true;
-        try {
-          const reasoningResult = await routeAmbiguousFindingsToReasoning(findings, {
-            rootDir,
-            routeDeepRemediation
-          });
-          findings = mergeReasoningFindings(findings, reasoningResult, rootDir);
-        } catch (error) {
-          if (isPaymentRequiredError(error)) {
-            process.stdout.write(`${PRO_ENGINE_CONNECTION_ERROR}\n`);
-          } else if (isManualReviewRequiredError(error)) {
-            process.stdout.write(`${MANUAL_REVIEW_MESSAGE}\n`);
-          } else {
-            createLogger({ stderr: process.stderr }).warn(
-              `Warning: ambiguous AST routing failed closed: ${error.message}`
-            );
+      const hasProAccess = hasProEngineAccess(process.env);
+      const complexFindings = findings.filter(isComplexStructuralFinding);
+
+      if (!hasProAccess && complexFindings.length > 0) {
+        output.write(`${ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE}\n`);
+        fixResult = mergeFixResults(localFixResult, {
+          attempted: 0,
+          applied: 0,
+          skipped: 0,
+          unsupported: complexFindings.length
+        });
+      } else {
+        let proPhaseBannerPrinted = false;
+        if (
+          findings.some(isAmbiguousAstFinding) &&
+          (forceRouteAmbiguous === true || options.routeAmbiguous === true || shouldRouteAmbiguousFindings(process.env))
+        ) {
+          output.write(renderFixPhaseBanner("pro"));
+          proPhaseBannerPrinted = true;
+          try {
+            const reasoningResult = await routeAmbiguousFindingsToReasoning(findings, {
+              rootDir,
+              routeDeepRemediation
+            });
+            findings = mergeReasoningFindings(findings, reasoningResult, rootDir);
+          } catch (error) {
+            if (isPaymentRequiredError(error)) {
+              process.stdout.write(`${PRO_ENGINE_CONNECTION_ERROR}\n`);
+            } else if (isManualReviewRequiredError(error)) {
+              process.stdout.write(`${MANUAL_REVIEW_MESSAGE}\n`);
+            } else {
+              createLogger({ stderr: process.stderr }).warn(
+                `Warning: ambiguous AST routing failed closed: ${error.message}`
+              );
+            }
           }
         }
-      }
 
-      const proPhaseFindings = findings.filter(isClaudePhaseFixFinding);
-      const shouldShowProBanner = proPhaseFindings.length > 0 && !proPhaseBannerPrinted;
-      if (shouldShowProBanner) {
-        output.write(renderFixPhaseBanner("pro"));
+        const proPhaseFindings = findings.filter(isClaudePhaseFixFinding);
+        const shouldShowProBanner = proPhaseFindings.length > 0 && !proPhaseBannerPrinted;
+        if (shouldShowProBanner) {
+          output.write(renderFixPhaseBanner("pro"));
+        }
+        const proFixResult = await applyScanFixes(proPhaseFindings, {
+          ci: ciEnvironment.isCi,
+          output,
+          input: options.input,
+          ask: options.ask,
+          rootDir
+        });
+        fixResult = mergeFixResults(localFixResult, proFixResult);
       }
-      const proFixResult = await applyScanFixes(proPhaseFindings, {
-        ci: ciEnvironment.isCi,
-        output,
-        input: options.input,
-        ask: options.ask,
-        rootDir
-      });
-      fixResult = mergeFixResults(localFixResult, proFixResult);
     } else if (
       findings.some(isAmbiguousAstFinding) &&
       (forceRouteAmbiguous === true || options.routeAmbiguous === true || shouldRouteAmbiguousFindings(process.env))
