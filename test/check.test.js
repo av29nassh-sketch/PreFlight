@@ -353,6 +353,59 @@ describe("PreFlight Check", () => {
     );
   });
 
+  test("flags secret-like frontend variable names assigned hardcoded string literals", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "config/keys.ts": [
+        "const apiKey = \"plain-text-secret\";",
+        "const safeLabel = \"active\";",
+        "export { apiKey, safeLabel };"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+    const secretFinding = findings.find(
+      (finding) => finding.ruleId === "frontend-secret" && /apiKey assigned a hardcoded literal/.test(finding.evidence || "")
+    );
+
+    expect(secretFinding).toEqual(
+      expect.objectContaining({
+        filePath: path.join(root, "config/keys.ts"),
+        line: 1,
+        fix: expect.objectContaining({
+          replacement: "process.env.API_KEY"
+        })
+      })
+    );
+  });
+
+  test("flags secret-like backend variable names assigned hardcoded string literals", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/token/route.js": [
+        "export async function GET() {",
+        "  const jwtSecret = \"literal-signing-secret\";",
+        "  return Response.json({ ok: Boolean(jwtSecret) });",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+    const backendFinding = findings.find(
+      (finding) => finding.ruleId === "backend-secret" && /jwtSecret assigned a hardcoded literal/.test(finding.evidence || "")
+    );
+
+    expect(backendFinding).toEqual(
+      expect.objectContaining({
+        filePath: path.join(root, "app/api/token/route.js"),
+        line: 2,
+        fix: expect.objectContaining({
+          replacement: "process.env.JWT_SECRET"
+        })
+      })
+    );
+  });
+
   test("flags public tables created without RLS being enabled", async () => {
     const { scanProject } = require("../index");
     const root = makeProject({
@@ -1276,11 +1329,35 @@ describe("PreFlight Check", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("🔍 [PHASE 1] Running Offline Local AST Optimization Pass...");
+    expect(result.stdout).toContain("[LOCAL] AST SQL fix available");
     expect(result.stdout).toContain(
       "⚠️ Advanced structural flaws detected. The free tier handles basic safety fixes. To unlock deep reasoning remediation and fix everything, join the invite-only beta at our website to get your PREFLIGHT_PRO_KEY."
     );
     expect(result.stdout).not.toContain("🚀 [PHASE 2] Handing Off Remaining Architectural Flaws");
     expect(fs.readFileSync(path.join(root, "lib/db.js"), "utf8")).toBe(contents);
+  });
+
+  test("scan --fix applies simple SQL parameterization locally without a PREFLIGHT_PRO_KEY", () => {
+    const root = makeProject({
+      "lib/db.js": "const query = \"SELECT * FROM users WHERE id = \" + userId;\n"
+    });
+
+    const result = runNode([path.join(__dirname, "..", "index.js"), "scan", root, "--fix"], root, {
+      env: {
+        PREFLIGHT_PRO_KEY: "",
+        PREFLIGHT_PRO_LICENSE_KEY: ""
+      },
+      input: "y\n"
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("🔍 [PHASE 1] Running Offline Local AST Optimization Pass...");
+    expect(result.stdout).toContain("[LOCAL] AST SQL fix available");
+    expect(result.stdout).not.toContain("⚠️ Advanced structural flaws detected.");
+    expect(result.stdout).not.toContain("🚀 [PHASE 2] Handing Off Remaining Architectural Flaws");
+    expect(fs.readFileSync(path.join(root, "lib/db.js"), "utf8")).toContain(
+      "({ text: \"SELECT * FROM users WHERE id = $1\", values: [userId] })"
+    );
   });
 
   test("scan --fix in CI prints proposed fixes without prompting or mutating files", () => {

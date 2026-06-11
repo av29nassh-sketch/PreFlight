@@ -191,6 +191,7 @@ const SERVICE_ROLE_SECRET_PATTERNS = [
   /\bsupabase[_-]?service[_-]?role\b/i,
   /\bservice[_-]?role[_-]?key\b/i
 ];
+const SECRET_IDENTIFIER_NAME_PATTERN = /key|secret|token|password/i;
 const DATABASE_URL_PATTERN = /^(?:postgresql|postgres|mysql|mongodb\+srv):\/\/\S+/i;
 const SERVICE_ROLE_NAME_PATTERN = /(?:^|[_-])(?:supabase[_-]?)?service[_-]?role(?:[_-]?key)?(?:$|[_-])/i;
 const SARIF_REPORT_NAME = "preflight-report.sarif";
@@ -1017,6 +1018,124 @@ function getCredentialFix(sourceCode, node, credential) {
   };
 }
 
+function normalizeEnvVarToken(name) {
+  return String(name || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+}
+
+function envReferenceForSecretName(name) {
+  const token = normalizeEnvVarToken(name);
+  return token ? `process.env.${token}` : null;
+}
+
+function findSecretAssignmentTarget(node, sourceCode) {
+  const identifiers = collectPatternIdentifiers(node, sourceCode);
+  if (identifiers.length === 0) {
+    return null;
+  }
+
+  const candidate = identifiers[identifiers.length - 1];
+  return SECRET_IDENTIFIER_NAME_PATTERN.test(candidate) ? candidate : null;
+}
+
+function getNamedSecretLiteralFix(sourceCode, valueNode, variableName) {
+  const replacement = envReferenceForSecretName(variableName);
+  if (!replacement) {
+    return undefined;
+  }
+
+  return {
+    kind: "credential",
+    replacement,
+    expectedText: textFromNode(sourceCode, valueNode),
+    startByte: byteIndexFromStringIndex(sourceCode, valueNode.startIndex),
+    endByte: byteIndexFromStringIndex(sourceCode, valueNode.endIndex)
+  };
+}
+
+function collectNamedSecretLiteralFindings({
+  filePath,
+  sourceCode,
+  tree,
+  ruleId,
+  message,
+  includeKnownSecretLiterals = false
+}) {
+  const findings = [];
+
+  walkTree(tree.rootNode, (node) => {
+    if (node.type === "variable_declarator") {
+      const nameNode = childForField(node, "name");
+      const valueNode = childForField(node, "value");
+      if (!nameNode || !valueNode || valueNode.type !== "string") {
+        return;
+      }
+
+      const variableName = findSecretAssignmentTarget(nameNode, sourceCode);
+      if (!variableName) {
+        return;
+      }
+
+      const innerString = unquoteTreeString(textFromNode(sourceCode, valueNode));
+      const matchedCredential = detectCredential(innerString);
+      if (!includeKnownSecretLiterals && (matchedCredential || detectSecret(innerString))) {
+        return;
+      }
+
+      findings.push(finding({
+        ruleId,
+        severity: "critical",
+        filePath,
+        line: lineFromStringIndex(sourceCode, valueNode.startIndex),
+        message,
+        evidence: `${variableName} assigned a hardcoded literal`,
+        fix: matchedCredential
+          ? getCredentialFix(sourceCode, valueNode, matchedCredential)
+          : getNamedSecretLiteralFix(sourceCode, valueNode, variableName)
+      }));
+      return;
+    }
+
+    if (node.type !== "assignment_expression") {
+      return;
+    }
+
+    const leftNode = childForField(node, "left");
+    const rightNode = childForField(node, "right");
+    if (!leftNode || !rightNode || rightNode.type !== "string") {
+      return;
+    }
+
+    const variableName = findSecretAssignmentTarget(leftNode, sourceCode);
+    if (!variableName) {
+      return;
+    }
+
+    const innerString = unquoteTreeString(textFromNode(sourceCode, rightNode));
+    const matchedCredential = detectCredential(innerString);
+    if (!includeKnownSecretLiterals && (matchedCredential || detectSecret(innerString))) {
+      return;
+    }
+
+    findings.push(finding({
+      ruleId,
+      severity: "critical",
+      filePath,
+      line: lineFromStringIndex(sourceCode, rightNode.startIndex),
+      message,
+      evidence: `${variableName} assigned a hardcoded literal`,
+      fix: matchedCredential
+        ? getCredentialFix(sourceCode, rightNode, matchedCredential)
+        : getNamedSecretLiteralFix(sourceCode, rightNode, variableName)
+    }));
+  });
+
+  return findings;
+}
+
 function readQuotedStaticString(value, startIndex = 0) {
   const source = String(value || "");
   const quote = source[startIndex];
@@ -1438,6 +1557,16 @@ function scanCredentialStrings({ filePath, relativePath, sourceCode, tree, requi
     );
   });
 
+  findings.push(
+    ...collectNamedSecretLiteralFindings({
+      filePath,
+      sourceCode,
+      tree,
+      ruleId: "frontend-secret",
+      message: frontendSecretMessage(requireClientComponent)
+    })
+  );
+
   return dedupeFindings(findings);
 }
 
@@ -1496,6 +1625,19 @@ function scanBackendStrings({ filePath, relativePath, sourceCode, tree, includeS
       })
     );
   });
+
+  if (isBackendApiRoute(relativePath)) {
+    findings.push(
+      ...collectNamedSecretLiteralFindings({
+        filePath,
+        sourceCode,
+        tree,
+        ruleId: "backend-secret",
+        message: "Secret-like backend variables must load from process.env instead of hardcoded literals.",
+        includeKnownSecretLiterals: true
+      })
+    );
+  }
 
   return dedupeFindings(findings);
 }
@@ -3128,7 +3270,11 @@ function shouldRouteAmbiguousFindings(env = process.env) {
 }
 
 function isOfflineLocalFixFinding(item) {
-  return item?.fix?.kind === "credential" || item?.fix?.kind === "scaffold-server-action";
+  return (
+    item?.fix?.kind === "credential" ||
+    item?.fix?.kind === "scaffold-server-action" ||
+    item?.fix?.kind === "sql-remediation"
+  );
 }
 
 function isClaudePhaseFixFinding(item) {
@@ -3260,6 +3406,9 @@ function renderFixPreviewHeading(filePath, node) {
   }
 
   if (node?.kind === "sql-remediation") {
+    if (node?.engine === "local") {
+      return `\n[LOCAL] AST SQL fix available in ${filePath}\n`;
+    }
     return `\n[PRO] SQL fix generated via Pro Engine for ${filePath}\n`;
   }
 
@@ -3350,6 +3499,27 @@ function assertNonOverlappingFixes(fixes) {
   }
 }
 
+function dedupeExactFixes(fixes) {
+  const seen = new Set();
+  return fixes.filter((fix) => {
+    const key = [
+      fix.kind,
+      fix.startByte,
+      fix.endByte,
+      fix.expectedText || "",
+      fix.replacement || "",
+      fix.engine || ""
+    ].join(":");
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
 async function applyScanFixes(findings, options = {}) {
   const fixesByFile = new Map();
   const scaffoldFixes = [];
@@ -3433,20 +3603,35 @@ async function applyScanFixes(findings, options = {}) {
             unsupported += 1;
             continue;
           }
+          let resolvedEngine = "pro";
           const replacement = usesDefaultSqlRemediator
             ? await generateParameterizedFix(fix.rawSnippet, {
+                localOnly: options.localOnlySqlRemediation === true,
+                onResolution: ({ engine } = {}) => {
+                  if (engine) {
+                    resolvedEngine = engine;
+                  }
+                },
                 onProviderFailure: () => {
                   sqlRemediationUnavailable = true;
                 }
               })
-            : await generateParameterizedFix(fix.rawSnippet);
+            : await generateParameterizedFix(fix.rawSnippet, {
+                localOnly: options.localOnlySqlRemediation === true,
+                onResolution: ({ engine } = {}) => {
+                  if (engine) {
+                    resolvedEngine = engine;
+                  }
+                }
+              });
           if (replacement === fix.rawSnippet) {
             unsupported += 1;
             continue;
           }
           resolvedFixes.push({
             ...fix,
-            replacement
+            replacement,
+            engine: resolvedEngine
           });
           continue;
         }
@@ -3454,10 +3639,11 @@ async function applyScanFixes(findings, options = {}) {
         resolvedFixes.push(fix);
       }
 
-      const sortedFixes = resolvedFixes
+      const uniqueResolvedFixes = dedupeExactFixes(resolvedFixes);
+      const sortedFixes = uniqueResolvedFixes
         .slice()
         .sort((left, right) => right.startByte - left.startByte);
-      assertNonOverlappingFixes(resolvedFixes);
+      assertNonOverlappingFixes(uniqueResolvedFixes);
 
       for (const fix of sortedFixes) {
         const before = currentSourceBytes;
@@ -4318,7 +4504,8 @@ async function runCli(argv = process.argv, options = {}) {
         output,
         input: options.input,
         ask: options.ask,
-        rootDir
+        rootDir,
+        localOnlySqlRemediation: true
       });
       findings = options.diff
         ? await scanProjectDiff(rootDir, { policy: scanPolicy })

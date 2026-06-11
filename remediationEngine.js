@@ -111,6 +111,19 @@ function getNodeText(node, sourceCode) {
   return sourceCode.slice(node.startIndex, node.endIndex);
 }
 
+function unquoteTreeString(value) {
+  const source = String(value || "");
+  if (source.length >= 2) {
+    const first = source[0];
+    const last = source[source.length - 1];
+    if ((first === "\"" || first === "'" || first === "`") && last === first) {
+      return source.slice(1, -1);
+    }
+  }
+
+  return source;
+}
+
 function toByteIndex(sourceCode, stringIndex) {
   return Buffer.byteLength(sourceCode.slice(0, stringIndex), "utf8");
 }
@@ -138,6 +151,36 @@ function nodeContainsSqlKeyword(node, sourceCode) {
   return Boolean(node && SQL_KEYWORD_PATTERN.test(getNodeText(node, sourceCode)));
 }
 
+function nodeContainsTemplateInterpolation(node) {
+  if (!node || node.type !== "template_string") {
+    return false;
+  }
+
+  for (let index = 0; index < node.namedChildCount; index += 1) {
+    if (node.namedChild(index).type === "template_substitution") {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function nodeRepresentsDynamicSqlSegment(node) {
+  if (!node) {
+    return false;
+  }
+
+  if (node.type === "identifier") {
+    return true;
+  }
+
+  if (node.type === "template_string") {
+    return nodeContainsTemplateInterpolation(node);
+  }
+
+  return node.type !== "string";
+}
+
 function makeMatch(node, sourceCode) {
   const rawSnippet = getNodeText(node, sourceCode);
   const startIndex = toByteIndex(sourceCode, node.startIndex);
@@ -157,9 +200,20 @@ function findSqlConcatenations(node, sourceCode, matches = []) {
     const left = getFieldNode(node, "left");
     const right = getFieldNode(node, "right");
 
-    if (nodeContainsSqlKeyword(left, sourceCode) || nodeContainsSqlKeyword(right, sourceCode)) {
+    if (
+      (nodeContainsSqlKeyword(left, sourceCode) && nodeRepresentsDynamicSqlSegment(right)) ||
+      (nodeContainsSqlKeyword(right, sourceCode) && nodeRepresentsDynamicSqlSegment(left))
+    ) {
       matches.push(makeMatch(node, sourceCode));
     }
+  }
+
+  if (
+    node.type === "template_string" &&
+    nodeContainsSqlKeyword(node, sourceCode) &&
+    nodeContainsTemplateInterpolation(node)
+  ) {
+    matches.push(makeMatch(node, sourceCode));
   }
 
   for (let index = 0; index < node.namedChildCount; index += 1) {
@@ -291,6 +345,45 @@ function flattenConcatenationNodes(node, sourceCode, parts = []) {
   return parts;
 }
 
+function collectSqlExpressionParts(node, sourceCode, parts = []) {
+  if (!node) {
+    return parts;
+  }
+
+  if (node.type === "parenthesized_expression" && node.namedChildCount === 1) {
+    return collectSqlExpressionParts(node.namedChild(0), sourceCode, parts);
+  }
+
+  if (node.type === "binary_expression" && getOperator(node, sourceCode) === "+") {
+    collectSqlExpressionParts(getFieldNode(node, "left"), sourceCode, parts);
+    collectSqlExpressionParts(getFieldNode(node, "right"), sourceCode, parts);
+    return parts;
+  }
+
+  if (node.type === "template_string") {
+    for (let index = 0; index < node.namedChildCount; index += 1) {
+      const child = node.namedChild(index);
+      if (child.type === "string_fragment") {
+        parts.push({ kind: "text", value: getNodeText(child, sourceCode) });
+        continue;
+      }
+
+      if (child.type === "template_substitution" && child.namedChildCount > 0) {
+        parts.push({ kind: "expression", value: getNodeText(child.namedChild(0), sourceCode).trim() });
+      }
+    }
+    return parts;
+  }
+
+  if (node.type === "string") {
+    parts.push({ kind: "text", value: unquoteTreeString(getNodeText(node, sourceCode)) });
+    return parts;
+  }
+
+  parts.push({ kind: "expression", value: getNodeText(node, sourceCode).trim() });
+  return parts;
+}
+
 function isSqlLiteralSegment(node, sourceCode) {
   const text = getNodeText(node, sourceCode).trim();
   return /^['"`]/.test(text) || SQL_KEYWORD_PATTERN.test(text);
@@ -300,21 +393,46 @@ async function extractSqlBindingsFromSnippet(rawSnippet) {
   const tree = await parseJavaScript(rawSnippet);
   try {
     const expressionNode = findExpressionNode(tree.rootNode);
-    const parts = flattenConcatenationNodes(expressionNode, rawSnippet);
-    const bindings = [];
+    const parts = collectSqlExpressionParts(expressionNode, rawSnippet);
+    return parts
+      .filter((part) => part?.kind === "expression" && part.value)
+      .map((part) => part.value);
+  } finally {
+    tree.delete?.();
+  }
+}
 
+async function buildLocalSqlParameterizedFix(rawSnippet) {
+  const tree = await parseJavaScript(rawSnippet);
+  try {
+    const expressionNode = findExpressionNode(tree.rootNode);
+    const parts = collectSqlExpressionParts(expressionNode, rawSnippet);
+    if (parts.length === 0) {
+      return null;
+    }
+
+    let sqlText = "";
+    const bindings = [];
     for (const part of parts) {
-      if (!part || isSqlLiteralSegment(part, rawSnippet)) {
+      if (part.kind === "text") {
+        sqlText += part.value;
         continue;
       }
 
-      const text = getNodeText(part, rawSnippet).trim();
-      if (text && !bindings.includes(text)) {
-        bindings.push(text);
+      if (!part.value) {
+        return null;
       }
+
+      bindings.push(part.value);
+      sqlText += `$${bindings.length}`;
     }
 
-    return bindings;
+    const normalizedSqlText = sqlText.trim().replace(/;+\s*$/, "");
+    if (!normalizedSqlText || !SQL_KEYWORD_PATTERN.test(normalizedSqlText) || bindings.length === 0) {
+      return null;
+    }
+
+    return `({ text: ${JSON.stringify(normalizedSqlText)}, values: [${bindings.join(", ")}] })`;
   } finally {
     tree.delete?.();
   }
@@ -626,6 +744,17 @@ async function generateParameterizedFix(rawSnippet, options = {}) {
     ((message) => {
       console.log(message);
     });
+  const localFix = await buildLocalSqlParameterizedFix(rawSnippet);
+  if (localFix) {
+    if (typeof options.onResolution === "function") {
+      options.onResolution({ engine: "local" });
+    }
+    return localFix;
+  }
+
+  if (options.localOnly === true) {
+    return rawSnippet;
+  }
   const provider = options.client
     ? { client: options.client, model: options.model || process.env.MODEL_NAME || DEFAULT_OPENAI_MODEL }
     : resolveLlmProvider(process.env, options);
@@ -684,6 +813,9 @@ async function generateParameterizedFix(rawSnippet, options = {}) {
   if (response?.usage) {
     logTokenUsage(response, log);
   }
+  if (typeof options.onResolution === "function") {
+    options.onResolution({ engine: "pro" });
+  }
   const proposedFix = !options.client && provider.provider === "preflight-pro"
     ? extractProxyCodeFragment(extractPreflightProxyText(response))
     : extractChatCompletionText(response);
@@ -701,6 +833,7 @@ module.exports = {
   findSqlConcatenations,
   formatProviderFailureMessage,
   generateParameterizedFix,
+  buildLocalSqlParameterizedFix,
   MANUAL_REVIEW_MESSAGE,
   MANUAL_REVIEW_REQUIRED,
   PRO_ENGINE_CONNECTION_ERROR,

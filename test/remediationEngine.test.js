@@ -42,6 +42,22 @@ describe("remediationEngine", () => {
     ]);
   });
 
+  test("findSqlConcatenations detects interpolated SQL template literals", async () => {
+    const { findSqlConcatenations, parseJavaScript } = require("../remediationEngine");
+    const sourceCode = [
+      "const safe = `hello ${name}`;",
+      "const query = `SELECT * FROM users WHERE id = ${userId}`;",
+      ""
+    ].join("\n");
+    const tree = await parseJavaScript(sourceCode);
+
+    const matches = findSqlConcatenations(tree.rootNode, sourceCode);
+
+    expect(matches.map((match) => match.rawSnippet)).toEqual([
+      "`SELECT * FROM users WHERE id = ${userId}`"
+    ]);
+  });
+
   test("generateParameterizedFix sends a constrained zero-temperature Chat Completions request", async () => {
     const { generateParameterizedFix, SURGICAL_LLM_SYSTEM_PROMPT } = require("../remediationEngine");
     const requests = [];
@@ -70,7 +86,7 @@ describe("remediationEngine", () => {
     };
     const logs = [];
 
-    const fix = await generateParameterizedFix("\"SELECT * FROM users WHERE id = \" + userId", {
+    const fix = await generateParameterizedFix("buildSecureQuery(userId)", {
       client: fakeClient,
       log: (message) => logs.push(message),
       model: "test-model"
@@ -81,7 +97,7 @@ describe("remediationEngine", () => {
       model: "test-model",
       messages: [
         { role: "system", content: SURGICAL_LLM_SYSTEM_PROMPT },
-        { role: "user", content: "\"SELECT * FROM users WHERE id = \" + userId" }
+        { role: "user", content: "buildSecureQuery(userId)" }
       ],
       temperature: 0
     });
@@ -95,7 +111,15 @@ describe("remediationEngine", () => {
     await expect(verifySyntaxSafety("const query = ")).rejects.toThrow("Remediation Syntax Violation");
   });
 
-  test("generateParameterizedFix skips safely and requires a PreFlight Pro activation when no proxy key exists", async () => {
+  test("generateParameterizedFix deterministically parameterizes simple SQL snippets offline before requesting Pro access", async () => {
+    const { generateParameterizedFix } = require("../remediationEngine");
+
+    const result = await generateParameterizedFix("\"SELECT * FROM users WHERE id = \" + userId");
+
+    expect(result).toBe("({ text: \"SELECT * FROM users WHERE id = $1\", values: [userId] })");
+  });
+
+  test("generateParameterizedFix skips safely and requires a PreFlight Pro activation when no proxy key exists for unresolved snippets", async () => {
     const {
       ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE,
       generateParameterizedFix
@@ -109,7 +133,7 @@ describe("remediationEngine", () => {
     delete process.env.PREFLIGHT_PRO_LICENSE_KEY;
 
     try {
-      const rawSnippet = "\"SELECT * FROM users WHERE id = \" + userId";
+      const rawSnippet = "queryText";
       const result = await generateParameterizedFix(rawSnippet, {
         warn: (message) => warnings.push(message)
       });
@@ -144,7 +168,7 @@ describe("remediationEngine", () => {
 
   test("generateParameterizedFix surfaces the unified Pro engine connection error when the provider request fails", async () => {
     const { generateParameterizedFix, PRO_ENGINE_CONNECTION_ERROR } = require("../remediationEngine");
-    const rawSnippet = "\"SELECT * FROM users WHERE id = \" + userId";
+    const rawSnippet = "buildSecureQuery(userId)";
     const warnings = [];
     const providerFailures = [];
     const fakeClient = {
@@ -176,7 +200,7 @@ describe("remediationEngine", () => {
     const { generateParameterizedFix, SURGICAL_LLM_SYSTEM_PROMPT } = require("../remediationEngine");
     const requests = [];
 
-    const fix = await generateParameterizedFix("\"SELECT * FROM users WHERE id = \" + userId", {
+    const fix = await generateParameterizedFix("buildSecureQuery(userId)", {
       licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
       transport: async (request) => {
         requests.push(request);
@@ -204,7 +228,7 @@ describe("remediationEngine", () => {
         messages: [
           {
             role: "user",
-            content: "\"SELECT * FROM users WHERE id = \" + userId"
+            content: "buildSecureQuery(userId)"
           }
         ]
       }
@@ -214,7 +238,7 @@ describe("remediationEngine", () => {
   test("generateParameterizedFix extracts the code block when the proxy returns explanation text plus markdown", async () => {
     const { generateParameterizedFix } = require("../remediationEngine");
 
-    const fix = await generateParameterizedFix("\"SELECT * FROM users WHERE id = \" + userId", {
+    const fix = await generateParameterizedFix("buildSecureQuery(userId)", {
       licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
       transport: async () => ({
         content: [
@@ -236,7 +260,7 @@ describe("remediationEngine", () => {
   test("generateParameterizedFix wraps bare SQL proxy output into a query config expression for inline replacement", async () => {
     const { generateParameterizedFix } = require("../remediationEngine");
 
-    const fix = await generateParameterizedFix("\"SELECT * FROM users WHERE id = \" + userId", {
+    const fix = await generateParameterizedFix("buildSecureQuery(userId)", {
       licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
       transport: async () => ({
         content: [
@@ -247,7 +271,7 @@ describe("remediationEngine", () => {
       })
     });
 
-    expect(fix).toBe("({ text: \"SELECT * FROM users WHERE id = $1\", values: [userId] })");
+    expect(fix).toBe("({ text: \"SELECT * FROM users WHERE id = $1\", values: [buildSecureQuery(userId)] })");
   });
 
   test("resolveLlmProvider uses the PreFlight Pro proxy key instead of user-supplied AI keys", () => {
