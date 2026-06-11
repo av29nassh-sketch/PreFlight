@@ -9,6 +9,8 @@ const MAX_MESSAGE_CHARS = 120000;
 const MAX_SYSTEM_CHARS = 12000;
 const MAX_ALLOWED_TOKENS = 2500;
 const ANTHROPIC_TIMEOUT_MS = 55000;
+const BETA_KEY_TTL_DAYS = 14;
+const SUPABASE_BETA_KEYS_TABLE = "preflight_beta_keys";
 const PREFLIGHT_BETA_KEY_PATTERN = /^PREFLIGHT-BETA-\d{8}-[A-Z0-9]+$/i;
 
 const app = express();
@@ -34,14 +36,189 @@ function extractPreflightActivationToken(req) {
   return typeof legacyHeader === "string" ? legacyHeader.trim() : "";
 }
 
-function requirePreflightActivation(req, res, next) {
+function getSupabaseRestConfig() {
+  const supabaseUrl = typeof process.env.SUPABASE_URL === "string" ? process.env.SUPABASE_URL.trim() : "";
+  const serviceRoleKey =
+    typeof process.env.SUPABASE_SERVICE_ROLE_KEY === "string"
+      ? process.env.SUPABASE_SERVICE_ROLE_KEY.trim()
+      : "";
+  const tableName =
+    typeof process.env.PREFLIGHT_BETA_KEYS_TABLE === "string" && process.env.PREFLIGHT_BETA_KEYS_TABLE.trim()
+      ? process.env.PREFLIGHT_BETA_KEYS_TABLE.trim()
+      : SUPABASE_BETA_KEYS_TABLE;
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return null;
+  }
+
+  return {
+    supabaseUrl: supabaseUrl.replace(/\/+$/, ""),
+    serviceRoleKey,
+    tableName
+  };
+}
+
+function createSupabaseHeaders(config, extraHeaders = {}) {
+  return {
+    apikey: config.serviceRoleKey,
+    Authorization: `Bearer ${config.serviceRoleKey}`,
+    "Content-Type": "application/json",
+    ...extraHeaders
+  };
+}
+
+function createSupabaseTableUrl(config, searchParams) {
+  const query = searchParams.toString();
+  const tablePath = encodeURIComponent(config.tableName);
+  return `${config.supabaseUrl}/rest/v1/${tablePath}${query ? `?${query}` : ""}`;
+}
+
+async function parseSupabaseError(response) {
+  const rawText = await response.text();
+  if (!rawText) {
+    return response.statusText || "Unknown Supabase error";
+  }
+
+  try {
+    const parsed = JSON.parse(rawText);
+    return parsed?.message || parsed?.error_description || parsed?.error || rawText;
+  } catch {
+    return rawText;
+  }
+}
+
+async function fetchSupabaseJson(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const errorMessage = await parseSupabaseError(response);
+    throw new Error(`Supabase beta key request failed (${response.status}): ${errorMessage}`);
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  return response.json();
+}
+
+async function getBetaKeyRecord(config, token) {
+  const searchParams = new URLSearchParams({
+    key_string: `eq.${token}`,
+    select: "key_string,activated_at,expires_at",
+    limit: "1"
+  });
+  const payload = await fetchSupabaseJson(createSupabaseTableUrl(config, searchParams), {
+    method: "GET",
+    headers: createSupabaseHeaders(config)
+  });
+
+  return Array.isArray(payload) && payload.length > 0 ? payload[0] : null;
+}
+
+async function activateBetaKeyRecord(config, token, now = new Date()) {
+  const activatedAt = now.toISOString();
+  const expiresAt = new Date(now.getTime() + BETA_KEY_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const searchParams = new URLSearchParams({
+    key_string: `eq.${token}`,
+    activated_at: "is.null",
+    select: "key_string,activated_at,expires_at"
+  });
+  const payload = await fetchSupabaseJson(createSupabaseTableUrl(config, searchParams), {
+    method: "PATCH",
+    headers: createSupabaseHeaders(config, {
+      Prefer: "return=representation"
+    }),
+    body: JSON.stringify({
+      activated_at: activatedAt,
+      expires_at: expiresAt
+    })
+  });
+
+  return Array.isArray(payload) && payload.length > 0 ? payload[0] : null;
+}
+
+function isBetaKeyExpired(record, now = new Date()) {
+  if (!record?.expires_at) {
+    return true;
+  }
+
+  const expiresAt = new Date(record.expires_at);
+  if (!Number.isFinite(expiresAt.getTime())) {
+    return true;
+  }
+
+  return now.getTime() > expiresAt.getTime();
+}
+
+async function validateOrActivateBetaKey(token, now = new Date()) {
+  const config = getSupabaseRestConfig();
+  if (!config) {
+    throw new Error("Beta key validation backend is not configured.");
+  }
+
+  let record = await getBetaKeyRecord(config, token);
+  if (!record) {
+    return {
+      allowed: false,
+      status: 401,
+      error: "Unauthorized"
+    };
+  }
+
+  if (record.activated_at == null) {
+    const activatedRecord = await activateBetaKeyRecord(config, token, now);
+    if (activatedRecord) {
+      return {
+        allowed: true,
+        record: activatedRecord
+      };
+    }
+
+    record = await getBetaKeyRecord(config, token);
+    if (!record) {
+      return {
+        allowed: false,
+        status: 401,
+        error: "Unauthorized"
+      };
+    }
+  }
+
+  if (isBetaKeyExpired(record, now)) {
+    return {
+      allowed: false,
+      status: 401,
+      error: "Beta License Expired"
+    };
+  }
+
+  return {
+    allowed: true,
+    record
+  };
+}
+
+async function requirePreflightActivation(req, res, next) {
   const token = extractPreflightActivationToken(req);
   if (!PREFLIGHT_BETA_KEY_PATTERN.test(token)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
-  req.preflightActivationToken = token;
-  next();
+  try {
+    const validation = await validateOrActivateBetaKey(token);
+    if (!validation.allowed) {
+      return res.status(validation.status || 401).json({ error: validation.error || "Unauthorized" });
+    }
+
+    req.preflightActivationToken = token;
+    req.preflightActivationRecord = validation.record;
+    return next();
+  } catch (error) {
+    console.error("PreFlight proxy key validation failed", {
+      message: error instanceof Error ? error.message : "Unknown validation error"
+    });
+    return res.status(500).json({ error: "Deep reasoning engine communication failed." });
+  }
 }
 
 function isPlainObject(value) {
