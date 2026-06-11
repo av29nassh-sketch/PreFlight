@@ -69,16 +69,14 @@ const quickStartBlocks = [
   {
     label: "PowerShell",
     lines: [
-      '$env:X_PREFLIGHT_PRO_KEY="YOUR_BETA_KEY"',
-      "$env:PREFLIGHT_PRO_KEY=$env:X_PREFLIGHT_PRO_KEY",
+      '$env:PREFLIGHT_PRO_KEY="YOUR_BETA_KEY"',
       "node ./index.js scan ./path-to-code --fix"
     ]
   },
   {
     label: "Bash / macOS",
     lines: [
-      'export X_PREFLIGHT_PRO_KEY="YOUR_BETA_KEY"',
-      'export PREFLIGHT_PRO_KEY="$X_PREFLIGHT_PRO_KEY"',
+      'export PREFLIGHT_PRO_KEY="YOUR_BETA_KEY"',
       "node ./index.js scan ./path-to-code --fix"
     ]
   }
