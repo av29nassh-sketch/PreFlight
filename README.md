@@ -1,6 +1,34 @@
 # PreFlight
 
+## ⚡ Choose Your Remediation Depth
+
+PreFlight runs in two distinct tiers depending on what your codebase needs:
+
+### 🟢 Free Tier (Local AST)
+- **What it does:** Scans and automatically fixes basic security and structural issues completely offline.
+- **Setup:** Zero config. Works instantly out of the box.
+- **Commands:**
+  ```bash
+  npm install -g preflight-cli
+  preflight scan . --fix
+  ```
+
+### 🚀 Pro Tier (Deep Reasoning)
+- **What it does:** Scans and automatically fixes everything—including complex multi-file architectural flaws, tenant isolation logic, and parametric SQL injections.
+- **Setup:** Requires an active `PREFLIGHT_PRO_KEY` environment variable.
+- **Commands:**
+  ```bash
+  # Set your key, then run the exact same command:
+  preflight scan . --fix
+  ```
+
 Stop AI Coding Drift before it becomes production technical debt. PreFlight is a local-first safety gate and deterministic orchestration engine designed to catch risky, hallucinated, or unverified AI-generated code snippets inside modern AI coding workflows.
+
+## Pricing
+
+- Free Tier: 100% offline AST syntax scanning and basic structural auto-fixes.
+- Solo Founder Tier: `$19/month`
+- Team Tier: `$49/seat/month`
 
 ## The Tri-State Risk Score Engine
 
@@ -10,70 +38,9 @@ PreFlight parses your code down to an Abstract Syntax Tree (AST) using Tree-Sitt
 - High-Risk Drift: Structural state inconsistencies, un-idempotent webhooks, or open CORS contexts.
 - Likely Safe: Standard algorithmic changes matching your pre-defined stack rules.
 
-## Product Tiers
+## 2-Phase Pipeline
 
-- PreFlight Guardian: Our free-tier local engine. Protects against basic structural defects and provides up to 5 auto-fixes.
-- PreFlight Pro: Our premium engine unlocking unlimited deep reasoning auto-fixes powered by PreFlight's advanced cloud reasoning model.
-
-## Installation & Beta Activation
-
-PreFlight works completely out of the box for free immediate local AST scanning. Unlocking the premium PreFlight Pro Deep Reasoning pipeline requires an issued beta key set to your environment variables.
-
-### 🚀 PreFlight Pro Quick Start
-
-1. Install PreFlight globally:
-
-```bash
-npm install -g preflight-cli
-```
-
-2. Set your private Pro Engine Key:
-
-```powershell
-# PowerShell
-$env:PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
-```
-
-```bash
-# Bash / macOS
-export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
-```
-
-3. Fire the multi-tier auto-fix engine:
-
-```bash
-preflight scan ./your-project-dir --fix
-```
-
-👉 💡 Pro-Tip: Once installed globally, you never have to mess with relative script paths again. You can directly invoke `preflight scan .` from inside any project directory on your machine to scan it instantly.
-
-## PreFlight Pro (Paid Tier / Beta)
-
-PreFlight Pro is the paid tier of the product and is currently running as an invite-only beta.
-
-### Pricing Transparency
-
-- Free Tier: 100% offline AST syntax scanning and basic structural auto-fixes.
-- Solo Founder Tier: `$19/month`. Unlocks the premium Deep Reasoning Pipeline.
-- Team Tier: `$49/seat/month`. Unlocks the premium Deep Reasoning Pipeline for collaborative rollout.
-
-### Pro Command Runtime
-
-If you are part of the closed beta, set your Pro key inside the same shell session before running `--fix`.
-
-```powershell
-$env:PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-YYYYMMDD-XXXX"
-preflight scan . --fix
-```
-
-```bash
-export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-YYYYMMDD-XXXX"
-preflight scan ./path-to-code --fix
-```
-
-### 2-Phase Pipeline
-
-PreFlight Pro now runs as a strict 2-phase remediation pipeline:
+PreFlight Pro runs as a strict 2-phase remediation pipeline:
 
 1. Phase 1: Offline Local AST Sweep
    PreFlight completes an ultra-fast offline structural pass first and applies any local-only fixes it can resolve without calling the cloud reasoning layer.
