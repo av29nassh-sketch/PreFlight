@@ -1260,6 +1260,29 @@ describe("PreFlight Check", () => {
     expect(fs.readFileSync(path.join(root, "dangerous-code.js"), "utf8")).toBe(contents);
   });
 
+  test("scan --fix halts after the local phase and prints the beta upgrade message when no PREFLIGHT_PRO_KEY exists for complex flaws", () => {
+    const contents = "const query = \"SELECT * FROM users WHERE id = \" + userId;\n";
+    const root = makeProject({
+      "lib/db.js": contents
+    });
+
+    const result = runNode([path.join(__dirname, "..", "index.js"), "scan", root, "--fix"], root, {
+      env: {
+        PREFLIGHT_PRO_KEY: "",
+        PREFLIGHT_PRO_LICENSE_KEY: ""
+      },
+      input: ""
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("🔍 [PHASE 1] Running Offline Local AST Optimization Pass...");
+    expect(result.stdout).toContain(
+      "⚠️ Advanced structural flaws detected. The free tier handles basic safety fixes. To unlock deep reasoning remediation and fix everything, join the invite-only beta at our website to get your PREFLIGHT_PRO_KEY."
+    );
+    expect(result.stdout).not.toContain("🚀 [PHASE 2] Handing Off Remaining Architectural Flaws");
+    expect(fs.readFileSync(path.join(root, "lib/db.js"), "utf8")).toBe(contents);
+  });
+
   test("scan --fix in CI prints proposed fixes without prompting or mutating files", () => {
     const contents = "const stripe_key = \"" + STRIPE_KEY + "\";\n";
     const root = makeProject({

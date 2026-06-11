@@ -9,11 +9,11 @@ PreFlight runs in two distinct tiers depending on what your codebase needs:
 - **Setup:** Zero config. Works instantly out of the box.
 - **Commands:**
   ```bash
-  npm install -g preflight-guardian@beta
+  npm install -g preflight-pro
   preflight scan . --fix
   ```
 
-Installing `preflight-guardian@beta` exposes the universal `preflight` command in your shell.
+Installing `preflight-pro` exposes the universal `preflight` command in your shell.
 
 ### 🚀 Pro Tier (Deep Reasoning)
 - **What it does:** Scans and automatically fixes everything—including complex multi-file architectural flaws, tenant isolation logic, and parametric SQL injections.

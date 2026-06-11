@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-const PROXY_URL = "https://preflight-proxy.vercel.app/api/v1/remediate";
+const PROXY_URL = "https://preflight-proxy.vercel.app/api/v1/remediation";
 const PREFLIGHT_BETA_KEY = "PREFLIGHT-BETA-AVINASH";
 const REQUEST_TIMEOUT_MS = 70000;
 
@@ -199,6 +199,7 @@ async function runVibeEaseEngine(astCleanedCode: string) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${PREFLIGHT_BETA_KEY}`,
         "X-PreFlight-Pro-Key": PREFLIGHT_BETA_KEY
       },
       body: JSON.stringify({

@@ -2,7 +2,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { performance } = require("node:perf_hooks");
 
-const PROXY_URL = "https://preflight-proxy.vercel.app/api/v1/remediate";
+const PROXY_URL = "https://preflight-proxy.vercel.app/api/v1/remediation";
 const REQUEST_TIMEOUT_MS = 70000;
 const FALLBACK_ROOT_CAUSE =
   "Root Cause: Architectural vulnerabilities and async/state mutations resolved.";
@@ -165,6 +165,7 @@ async function runVibeEaseEngine(astCleanedCode: string, retryInstruction?: stri
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${betaKey}`,
         "X-PreFlight-Pro-Key": betaKey
       },
       body: JSON.stringify({

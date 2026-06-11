@@ -238,6 +238,7 @@ describe("PreFlight core modular architecture", () => {
 
     expect(payload.diff).toBe(diff);
     expect(payload.requestedAction).toBe("manual-qa");
+    expect(prepared.headers.Authorization).toBe("Bearer pf_pro_test_license_key");
     expect(prepared.headers["X-PreFlight-Pro-Key"]).toBe("pf_pro_test_license_key");
     expect(prepared.logSafeSummary).not.toContain("pf_pro_test_license_key");
     expect(prepared.payload.requestedAction).toBe("auto-heal");
@@ -270,6 +271,7 @@ describe("PreFlight core modular architecture", () => {
       manual_qa_line: "Create two tenants locally and confirm user A cannot read user B records.",
       auto_patch: null
     });
+    expect(requests[0].headers.Authorization).toBe("Bearer PREFLIGHT-BETA-20260610-TEST1");
     expect(requests[0].headers["X-PreFlight-Pro-Key"]).toBe("PREFLIGHT-BETA-20260610-TEST1");
     expect(requests[0].payload.system).toBe(PREFLIGHT_SYSTEM_PROMPT);
     expect(requests[0].payload.messages[0].content).toContain("+await client.rpc('tenant_lookup')");
@@ -298,6 +300,7 @@ describe("PreFlight core modular architecture", () => {
       manual_qa_line: null,
       auto_patch: null
     });
+    expect(requests[0].headers.Authorization).toBe("Bearer PREFLIGHT-BETA-20260610-TEST1");
     expect(requests[0].headers["X-PreFlight-Pro-Key"]).toBe("PREFLIGHT-BETA-20260610-TEST1");
   });
 
@@ -390,7 +393,7 @@ describe("PreFlight core modular architecture", () => {
     expect(resolveReasoningEngineProvider({
       PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260610-TEST1"
     })).toEqual({
-      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediate",
+      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediation",
       licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
       provider: "preflight-proxy",
       timeoutMs: 30000
@@ -599,6 +602,7 @@ describe("PreFlight core modular architecture", () => {
       ],
       explanation: "Restore auth middleware and verify protected routes return 403."
     });
+    expect(requests[0].headers.Authorization).toBe("Bearer PREFLIGHT-BETA-20260610-TEST1");
     expect(requests[0].headers["X-PreFlight-Pro-Key"]).toBe("PREFLIGHT-BETA-20260610-TEST1");
     expect(requests[0].payload.system).toBe(REASONING_ENGINE_SYSTEM_PROMPT);
     expect(requests[0].payload.messages[0].content).toContain("middleware.ts");
@@ -608,7 +612,7 @@ describe("PreFlight core modular architecture", () => {
     const { requestCloudScan } = require("../src/router/cloud");
 
     const result = await requestCloudScan("diff --git a/app/page.tsx b/app/page.tsx\n+++ b/app/page.tsx", {
-      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediate",
+      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediation",
       licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
       mode: "auto-heal",
       transport: async () => ({

@@ -1,6 +1,6 @@
 const https = require("node:https");
 
-const DEFAULT_PREFLIGHT_PROXY_ENDPOINT = "https://preflight-proxy.vercel.app/api/v1/remediate";
+const DEFAULT_PREFLIGHT_PROXY_ENDPOINT = "https://preflight-proxy.vercel.app/api/v1/remediation";
 
 function buildPreflightProxyRequest(options = {}) {
   const endpoint = typeof options.endpoint === "string" && options.endpoint.trim()
@@ -48,6 +48,7 @@ function buildPreflightProxyRequest(options = {}) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      Authorization: `Bearer ${licenseKey}`,
       "X-PreFlight-Pro-Key": licenseKey
     },
     payload

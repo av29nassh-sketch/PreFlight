@@ -192,8 +192,9 @@ describe("remediationEngine", () => {
 
     expect(fix).toBe("db.query(\"SELECT * FROM users WHERE id = $1\", [userId])");
     expect(requests[0]).toMatchObject({
-      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediate",
+      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediation",
       headers: {
+        Authorization: "Bearer PREFLIGHT-BETA-20260610-TEST1",
         "Content-Type": "application/json",
         "X-PreFlight-Pro-Key": "PREFLIGHT-BETA-20260610-TEST1"
       },
@@ -256,8 +257,8 @@ describe("remediationEngine", () => {
       PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260610-TEST1",
       MODEL_NAME: "custom-model"
     })).toMatchObject({
-      baseURL: "https://preflight-proxy.vercel.app/api/v1/remediate",
-      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediate",
+      baseURL: "https://preflight-proxy.vercel.app/api/v1/remediation",
+      endpoint: "https://preflight-proxy.vercel.app/api/v1/remediation",
       model: "custom-model",
       provider: "preflight-pro"
     });

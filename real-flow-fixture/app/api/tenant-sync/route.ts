@@ -4,8 +4,18 @@ import { headers } from "next/headers";
 
 type SyncState = "idle" | "priming" | "streaming" | "committing";
 
-const VALID_STATES = new Set<string>(["idle", "priming", "streaming", "committing"]);
+const VALID_STATES = new Set<SyncState>(["idle", "priming", "streaming", "committing"]);
 const inFlight = new Map<string, Promise<unknown>>();
+
+function sanitizeString(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (value == null) return "";
+  return String(value).trim();
+}
+
+function validateSyncState(raw: string): raw is SyncState {
+  return VALID_STATES.has(raw as SyncState);
+}
 
 export async function POST(request: Request) {
   const headersList = headers();
@@ -18,10 +28,10 @@ export async function POST(request: Request) {
 
   const payload = await request.json();
 
-  const tenantId = String(payload.tenantId ?? "").trim();
-  const actorUserId = String(payload.userId ?? "").trim();
-  const replicaUrl = String(payload.replicaUrl ?? "").trim();
-  const rawState = String(payload.state ?? "idle").trim();
+  const tenantId = sanitizeString(payload.tenantId);
+  const actorUserId = sanitizeString(payload.userId);
+  const replicaUrl = sanitizeString(payload.replicaUrl);
+  const rawState = sanitizeString(payload.state || "idle");
 
   if (!tenantId || !actorUserId || !replicaUrl) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -35,11 +45,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Forbidden: user mismatch" }, { status: 403 });
   }
 
-  if (!VALID_STATES.has(rawState)) {
+  if (!validateSyncState(rawState)) {
     return NextResponse.json({ error: "Invalid state value" }, { status: 400 });
   }
 
-  const state = rawState as SyncState;
+  const state: SyncState = rawState;
 
   let parsedUrl: URL;
   try {
@@ -54,16 +64,14 @@ export async function POST(request: Request) {
   const lockKey = `${tenantId}:${state}`;
 
   if (!inFlight.has(lockKey)) {
-    inFlight.set(
-      lockKey,
-      enqueueTenantReplicaSync({
-        tenantId,
-        actorUserId,
-        replicaUrl: parsedUrl.toString(),
-        state,
-        request
-      })
-    );
+    const syncPromise = enqueueTenantReplicaSync({
+      tenantId,
+      actorUserId,
+      replicaUrl: parsedUrl.toString(),
+      state,
+      request
+    });
+    inFlight.set(lockKey, syncPromise);
   }
 
   try {

@@ -663,6 +663,7 @@ function prepareCloudFallback(diff, options = {}) {
   return {
     endpoint,
     headers: {
+      Authorization: `Bearer ${licenseKey}`,
       "X-PreFlight-Pro-Key": licenseKey,
       "Content-Type": "application/json",
       "X-PreFlight-Diff-SHA256": payload.diffSha256
@@ -676,7 +677,20 @@ function prepareCloudFallback(diff, options = {}) {
 }
 
 function isDirectPreflightProxyEndpoint(endpoint) {
-  return typeof endpoint === "string" && /\/api\/v1\/remediate\/?$/i.test(endpoint.trim());
+  return typeof endpoint === "string" && /\/api\/v1\/(?:remediation|remediate)\/?$/i.test(endpoint.trim());
+}
+
+function extractPreflightProxyLicenseKey(headers = {}) {
+  const authorizationHeader = headers.Authorization || headers.authorization;
+  if (typeof authorizationHeader === "string") {
+    const match = authorizationHeader.trim().match(/^Bearer\s+(.+)$/i);
+    if (match?.[1]?.trim()) {
+      return match[1].trim();
+    }
+  }
+
+  const legacyHeader = headers["X-PreFlight-Pro-Key"] || headers["x-preflight-pro-key"];
+  return typeof legacyHeader === "string" ? legacyHeader.trim() : "";
 }
 
 function createProxyTransport(options = {}) {
@@ -746,7 +760,7 @@ async function requestCloudScan(diff, options = {}) {
     const requestedAction = normalizeAction(options.mode);
     const response = await requestPreflightProxy({
       endpoint: request.endpoint,
-      licenseKey: options.licenseKey || request.headers["X-PreFlight-Pro-Key"],
+      licenseKey: options.licenseKey || extractPreflightProxyLicenseKey(request.headers),
       system: requestedAction === "auto-heal"
         ? REASONING_ENGINE_SYSTEM_PROMPT
         : PREFLIGHT_SYSTEM_PROMPT,

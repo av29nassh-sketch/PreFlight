@@ -9,6 +9,7 @@ const MAX_MESSAGE_CHARS = 120000;
 const MAX_SYSTEM_CHARS = 12000;
 const MAX_ALLOWED_TOKENS = 2500;
 const ANTHROPIC_TIMEOUT_MS = 55000;
+const PREFLIGHT_BETA_KEY_PATTERN = /^PREFLIGHT-BETA-\d{8}-[A-Z0-9]+$/i;
 
 const app = express();
 app.disable("x-powered-by");
@@ -20,12 +21,26 @@ function createAnthropicClient() {
   });
 }
 
+function extractPreflightActivationToken(req) {
+  const authorizationHeader = req.get("Authorization");
+  if (typeof authorizationHeader === "string") {
+    const bearerMatch = authorizationHeader.trim().match(/^Bearer\s+(.+)$/i);
+    if (bearerMatch?.[1]?.trim()) {
+      return bearerMatch[1].trim();
+    }
+  }
+
+  const legacyHeader = req.get("X-PreFlight-Pro-Key");
+  return typeof legacyHeader === "string" ? legacyHeader.trim() : "";
+}
+
 function requirePreflightActivation(req, res, next) {
-  const token = req.get("X-PreFlight-Pro-Key");
-  if (!token || !token.startsWith("PREFLIGHT-BETA-")) {
+  const token = extractPreflightActivationToken(req);
+  if (!PREFLIGHT_BETA_KEY_PATTERN.test(token)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
+  req.preflightActivationToken = token;
   next();
 }
 
@@ -108,7 +123,7 @@ app.get("/health", (_req, res) => {
   res.status(200).json({ status: "healthy" });
 });
 
-app.post("/api/v1/remediate", requirePreflightActivation, async (req, res) => {
+async function handleRemediationRequest(req, res) {
   if (!process.env.ANTHROPIC_KEY) {
     console.error("Anthropic proxy misconfigured: missing ANTHROPIC_KEY");
     return res.status(500).json({ error: "Deep reasoning engine communication failed." });
@@ -152,7 +167,9 @@ app.post("/api/v1/remediate", requirePreflightActivation, async (req, res) => {
 
     return res.status(500).json({ error: "Deep reasoning engine communication failed." });
   }
-});
+}
+
+app.post(["/api/v1/remediation", "/api/v1/remediate"], requirePreflightActivation, handleRemediationRequest);
 
 app.use((error, _req, res, _next) => {
   if (error?.type === "entity.too.large") {

@@ -70,7 +70,7 @@ const quickStartBlocks = [
     title: "1. Global Installation",
     label: "Install",
     lines: [
-      "npm install -g preflight-guardian@beta"
+      "npm install -g preflight-pro"
     ]
   },
   {
