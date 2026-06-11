@@ -67,17 +67,31 @@ const pricing = [
 
 const quickStartBlocks = [
   {
-    label: "PowerShell",
+    title: "1. Global Installation",
+    label: "Install",
     lines: [
-      '$env:PREFLIGHT_PRO_KEY="YOUR_BETA_KEY"',
-      "node ./index.js scan ./path-to-code --fix"
+      "npm install -g preflight-cli"
     ]
   },
   {
+    title: "2. Authenticate Pro Engine",
+    label: "PowerShell",
+    lines: [
+      '$env:PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"'
+    ]
+  },
+  {
+    title: "2. Authenticate Pro Engine",
     label: "Bash / macOS",
     lines: [
-      'export PREFLIGHT_PRO_KEY="YOUR_BETA_KEY"',
-      "node ./index.js scan ./path-to-code --fix"
+      'export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"'
+    ]
+  },
+  {
+    title: "3. Run Deep Remediation",
+    label: "Run",
+    lines: [
+      "preflight scan ./your-project-dir --fix"
     ]
   }
 ];
@@ -242,7 +256,7 @@ export default function MarketingPage() {
         <div className="mx-auto max-w-7xl px-6 py-16">
           <div className="max-w-2xl">
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">Quick Start</div>
-            <h2 className="mt-4 text-4xl font-semibold text-zinc-50">Wire your issued Pro key into the terminal, then run the full `--fix` pipeline.</h2>
+            <h2 className="mt-4 text-4xl font-semibold text-zinc-50">Install once, authenticate once, then run deep remediation from any terminal.</h2>
             <p className="mt-4 text-base leading-7 text-zinc-400">
               Phase 1 stays local and private. Phase 2 only kicks in for the remaining SQL and architectural flaws that need the Pro Engine.
             </p>
@@ -252,11 +266,16 @@ export default function MarketingPage() {
             {quickStartBlocks.map((block) => (
               <article className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-5" key={block.label}>
                 <div className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300">{block.label}</div>
+                <h3 className="mt-3 text-lg font-semibold text-zinc-50">{block.title}</h3>
                 <pre className="mt-4 overflow-x-auto rounded-md border border-zinc-800 bg-zinc-950 p-4 text-sm leading-7 text-zinc-200">
                   <code>{block.lines.join("\n")}</code>
                 </pre>
               </article>
             ))}
+          </div>
+
+          <div className="mt-6 rounded-lg border border-emerald-400/25 bg-emerald-400/[0.08] px-5 py-4 text-sm leading-7 text-emerald-100">
+            <span className="font-semibold text-emerald-200">⚡ Frictionless Workflow:</span> PreFlight registers as a core system utility. You don't have to navigate to a specific installation folder or invoke complex script commands every time. Simply open any terminal, jump into a project, and run <code className="rounded bg-zinc-950/80 px-1.5 py-0.5 text-zinc-100">preflight scan .</code> to optimize your codebase on the fly.
           </div>
         </div>
       </section>

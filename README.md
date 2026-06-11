@@ -17,27 +17,35 @@ PreFlight parses your code down to an Abstract Syntax Tree (AST) using Tree-Sitt
 
 ## Installation & Beta Activation
 
-To participate in the PreFlight Pro Closed Beta, clone the repository locally:
-
-```bash
-git clone https://github.com/av29nassh-sketch/PreFlight.git
-cd PreFlight
-npm install
-```
-
 PreFlight works completely out of the box for free immediate local AST scanning. Unlocking the premium PreFlight Pro Deep Reasoning pipeline requires an issued beta key set to your environment variables.
 
-Run a free local Guardian scan:
+### 🚀 PreFlight Pro Quick Start
+
+1. Install PreFlight globally:
 
 ```bash
-node index.js scan .
+npm install -g preflight-cli
 ```
 
-Run an interactive remediation pass:
+2. Set your private Pro Engine Key:
+
+```powershell
+# PowerShell
+$env:PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
+```
 
 ```bash
-node index.js scan . --fix
+# Bash / macOS
+export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
 ```
+
+3. Fire the multi-tier auto-fix engine:
+
+```bash
+preflight scan ./your-project-dir --fix
+```
+
+👉 💡 Pro-Tip: Once installed globally, you never have to mess with relative script paths again. You can directly invoke `preflight scan .` from inside any project directory on your machine to scan it instantly.
 
 ## PreFlight Pro (Paid Tier / Beta)
 
@@ -53,16 +61,14 @@ PreFlight Pro is the paid tier of the product and is currently running as an inv
 
 If you are part of the closed beta, set your Pro key inside the same shell session before running `--fix`.
 
-Note: the current CLI runtime reads `PREFLIGHT_PRO_KEY`.
-
 ```powershell
 $env:PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-YYYYMMDD-XXXX"
-node index.js scan . --fix
+preflight scan . --fix
 ```
 
 ```bash
 export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-YYYYMMDD-XXXX"
-node ./index.js scan ./path-to-code --fix
+preflight scan ./path-to-code --fix
 ```
 
 ### 2-Phase Pipeline
@@ -95,10 +101,10 @@ Available MCP tools include:
 PreFlight is designed to be used as a closed loop, not a one-shot scanner:
 
 1. Generate or modify code with your AI coding assistant.
-2. Run `node index.js scan .` to classify the change under the Tri-State Risk Score.
+2. Run `preflight scan .` to classify the change under the Tri-State Risk Score.
 3. If PreFlight returns `Hard Block`, stop and repair the structural issue before moving forward.
-4. If PreFlight returns `High-Risk Drift`, run `node index.js scan . --fix` and inspect every proposed fix before applying it.
-5. Re-run `node index.js scan .` after each accepted fix to confirm the repository settles into `Likely Safe`.
+4. If PreFlight returns `High-Risk Drift`, run `preflight scan . --fix` and inspect every proposed fix before applying it.
+5. Re-run `preflight scan .` after each accepted fix to confirm the repository settles into `Likely Safe`.
 6. Ship only after the final verification pass is green and the structural receipt matches the architecture boundary you intended.
 
 This verification loop is the product: scan, review, patch, re-scan, then deploy with confidence.
