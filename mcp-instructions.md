@@ -58,6 +58,12 @@ Run a scan from your project before relying on the MCP workflow:
 preflight scan .
 ```
 
+## 6. Free-tier fix cap
+
+- `scan_project` remains free and unlimited for local analysis.
+- `preflight_fix` shares the global free-tier ceiling and can successfully apply up to **10 free fixes total** before a `PREFLIGHT_PRO_KEY` is required.
+- The free-fix counter only advances when a fix is actually applied, so skipped or no-op runs do not consume the allowance.
+
 For LLM SQL remediation, pass the OpenAI key through the MCP `env` block above, a local `.env` file, or the CLI flag:
 
 ```bash

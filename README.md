@@ -6,6 +6,7 @@ PreFlight runs in two distinct tiers depending on what your codebase needs:
 
 ### 🟢 Free Tier (Local AST)
 - **What it does:** Scans and automatically fixes basic security and structural issues completely offline.
+- **Free fix allowance:** Includes **10 free auto-fix applications** before a `PREFLIGHT_PRO_KEY` is required for additional fix workflows. Local scanning remains completely free and unlimited.
 - **Setup:** Zero config. Works instantly out of the box.
 - **Commands:**
   ```bash
@@ -35,7 +36,7 @@ Stop AI Coding Drift before it becomes production technical debt. PreFlight is a
 
 ## Pricing
 
-- Free Tier: 100% offline AST syntax scanning and basic structural auto-fixes.
+- Free Tier: Unlimited local AST scanning plus **10 free auto-fix applications** before a Pro key is required for more fix runs.
 - Solo Founder Tier: `$19/month`
 - Team Tier: `$49/seat/month`
 
@@ -59,6 +60,8 @@ PreFlight Pro runs as a strict 2-phase remediation pipeline:
 ## Editor & MCP Usage
 
 PreFlight can run directly in the terminal or as an MCP server for AI-native editors.
+
+Free tier note: `scan_project` remains free and unlimited. `preflight_fix` can successfully apply up to **10 free fixes total** before a `PREFLIGHT_PRO_KEY` is required.
 
 Start the MCP server locally:
 
