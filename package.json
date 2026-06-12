@@ -35,7 +35,7 @@
     "README.md"
   ],
   "bin": {
-    "preflight": "./cli.js"
+    "preflight": "cli.js"
   },
   "scripts": {
     "test": "vitest run --globals",
