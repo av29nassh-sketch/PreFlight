@@ -23,6 +23,7 @@
     "cli"
   ],
   "files": [
+    "bin/preflight.js",
     "index.js",
     "logger.js",
     "remediationEngine.js",
@@ -34,7 +35,7 @@
     "README.md"
   ],
   "bin": {
-    "preflight": "./index.js"
+    "preflight": "./bin/preflight.js"
   },
   "scripts": {
     "test": "vitest run --globals",

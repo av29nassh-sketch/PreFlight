@@ -4822,7 +4822,10 @@ module.exports = {
   writeSarifReport
 };
 
-if (require.main === module) {
+const isBinEntrypoint =
+  module.parent && module.parent.filename === path.join(__dirname, "bin", "preflight.js");
+
+if (require.main === module || isBinEntrypoint) {
   runCli().catch((error) => {
     process.stderr.write(`PreFlight Check failed: ${error.message}\n`);
     process.exitCode = 2;
