@@ -42,20 +42,20 @@ describe("remediationEngine", () => {
     ]);
   });
 
-  test("findSqlConcatenations detects interpolated SQL template literals", async () => {
+  test("findSqlConcatenations ignores template literals that are not concatenated database queries", async () => {
     const { findSqlConcatenations, parseJavaScript } = require("../remediationEngine");
     const sourceCode = [
       "const safe = `hello ${name}`;",
       "const query = `SELECT * FROM users WHERE id = ${userId}`;",
+      "const message = `Patch ${index} action must be update, create, or delete.`;",
+      "const signature = `sha256=${digest}`;",
       ""
     ].join("\n");
     const tree = await parseJavaScript(sourceCode);
 
     const matches = findSqlConcatenations(tree.rootNode, sourceCode);
 
-    expect(matches.map((match) => match.rawSnippet)).toEqual([
-      "`SELECT * FROM users WHERE id = ${userId}`"
-    ]);
+    expect(matches).toEqual([]);
   });
 
   test("generateParameterizedFix sends a constrained zero-temperature Chat Completions request", async () => {

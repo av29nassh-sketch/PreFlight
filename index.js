@@ -78,6 +78,7 @@ const PREFLIGHT_WAITLIST_URL = "https://waitlister.me/p/preflight";
 const AST_AUDIT_VERSION_LABEL = "PreFlight 0.1.0-beta";
 const AST_AUDIT_SUCCESS_MS = 12;
 const CHECKOUT_ROUTE_DEMO_PATH = "server/checkout/route.ts";
+const PREFLIGHT_IGNORE_DIRECTIVE_PATTERN = /^\s*\/\/\s*preflight-ignore:\s*([a-z0-9_-]+)\s*$/i;
 const CHECKOUT_ROUTE_REMEDIATED_CODE = `// AI-generated checkout controller
 import 'dotenv/config';
 import { NextRequest, NextResponse } from 'next/server';
@@ -125,6 +126,15 @@ const TREE_SITTER_WASM_PATHS = {
 };
 const SOURCE_EXTENSIONS = ["js", "jsx", "ts", "tsx"];
 const SCAN_EXTENSIONS = new Set([...SOURCE_EXTENSIONS, "sql"]);
+const DEFAULT_SOURCE_GLOB_IGNORES = [
+  "**/*.d.ts",
+  "**/*.test.js",
+  "**/*.spec.js",
+  "**/node_modules/**",
+  "**/.next/**",
+  "**/dist/**",
+  "**/coverage/**"
+];
 const CREDENTIAL_PATTERNS = [
   {
     id: "aws-access-key-id",
@@ -372,7 +382,12 @@ function matchesIgnorePath(relativePath, ignorePattern) {
 }
 
 function isIgnoredPath(relativePath, policy = normalizePolicy()) {
-  return policy.ignorePaths.some((ignorePath) => matchesIgnorePath(relativePath, ignorePath));
+  const normalizedPath = toPosix(relativePath).replace(/^\/+/, "");
+  if (/\.(?:test|spec)\.js$/i.test(normalizedPath)) {
+    return true;
+  }
+
+  return policy.ignorePaths.some((ignorePath) => matchesIgnorePath(normalizedPath, ignorePath));
 }
 
 function globPatternToRegex(pattern) {
@@ -405,6 +420,75 @@ function applyPolicy(findings, policy = normalizePolicy(), rootDir = process.cwd
     const relativePath = toPosix(path.relative(path.resolve(rootDir), item.filePath));
     return !policy.ignoreRules.has(item.ruleId) && !isIgnoredPath(relativePath, policy);
   });
+}
+
+function attachScanMetadata(findings, metadata = {}) {
+  for (const [key, value] of Object.entries(metadata)) {
+    Object.defineProperty(findings, key, {
+      value,
+      enumerable: false,
+      configurable: true,
+      writable: false
+    });
+  }
+
+  return findings;
+}
+
+function collectPreflightIgnoreDirectives(sourceCode) {
+  const directives = new Map();
+  const lines = String(sourceCode || "").split(/\r?\n/);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(PREFLIGHT_IGNORE_DIRECTIVE_PATTERN);
+    if (!match?.[1]) {
+      continue;
+    }
+
+    const targetLine = index + 2;
+    const normalizedRule = match[1].trim().toLowerCase();
+    if (!directives.has(targetLine)) {
+      directives.set(targetLine, new Set());
+    }
+    directives.get(targetLine).add(normalizedRule);
+  }
+
+  return directives;
+}
+
+function suppressIgnoredFindings(findings, sourceByFile = new Map()) {
+  const suppressed = [];
+  const kept = [];
+  const directivesByFile = new Map();
+
+  for (const item of Array.isArray(findings) ? findings : []) {
+    const filePath = item?.filePath;
+    const line = item?.line;
+    if (!filePath || !Number.isInteger(line) || line < 1 || !sourceByFile.has(filePath)) {
+      kept.push(item);
+      continue;
+    }
+
+    if (!directivesByFile.has(filePath)) {
+      directivesByFile.set(filePath, collectPreflightIgnoreDirectives(sourceByFile.get(filePath)));
+    }
+
+    const directives = directivesByFile.get(filePath);
+    const matchingRules = directives.get(line);
+    if (matchingRules?.has(String(item.ruleId || "").toLowerCase())) {
+      suppressed.push({
+        ruleId: item.ruleId,
+        filePath,
+        line,
+        directiveLine: line - 1
+      });
+      continue;
+    }
+
+    kept.push(item);
+  }
+
+  return { findings: kept, suppressed };
 }
 
 function isSourceFile(filePath) {
@@ -2319,7 +2403,7 @@ async function scanBackendSource(rootDir = process.cwd(), options = {}) {
     cwd: resolvedRoot,
     absolute: false,
     dot: false,
-    ignore: ["**/*.d.ts", "**/node_modules/**", "**/.next/**", "**/dist/**", "**/coverage/**"]
+    ignore: DEFAULT_SOURCE_GLOB_IGNORES
   });
   const findings = [];
 
@@ -2370,7 +2454,7 @@ async function collectSourceFiles(rootDir, options = {}) {
     cwd: resolvedRoot,
     absolute: false,
     dot: false,
-    ignore: ["**/*.d.ts", "**/node_modules/**", "**/.next/**", "**/dist/**", "**/coverage/**"]
+    ignore: DEFAULT_SOURCE_GLOB_IGNORES
   });
 
   return relativePaths
@@ -2523,7 +2607,7 @@ async function scanFrontendSecrets(rootDir, options = {}) {
     cwd: rootDir,
     absolute: false,
     dot: false,
-    ignore: ["app/api/**", "pages/api/**", "**/*.d.ts", "**/node_modules/**", "**/.next/**"]
+    ignore: ["app/api/**", "pages/api/**", ...DEFAULT_SOURCE_GLOB_IGNORES]
   });
 
   const results = [];
@@ -2560,7 +2644,7 @@ async function scanBackendSecrets(rootDir, options = {}) {
     cwd: rootDir,
     absolute: false,
     dot: false,
-    ignore: ["**/*.d.ts", "**/node_modules/**", "**/.next/**", "**/dist/**", "**/coverage/**"]
+    ignore: DEFAULT_SOURCE_GLOB_IGNORES
   });
 
   const results = [];
@@ -2598,12 +2682,8 @@ async function scanStandaloneSecrets(rootDir, options = {}) {
     absolute: false,
     dot: false,
     ignore: [
-      "**/*.d.ts",
+      ...DEFAULT_SOURCE_GLOB_IGNORES,
       "{app,pages}/**",
-      "**/node_modules/**",
-      "**/.next/**",
-      "**/dist/**",
-      "**/coverage/**"
     ]
   });
 
@@ -3009,6 +3089,7 @@ async function scanFiles(rootDir, files, options = {}) {
   const findings = [];
   const projectGraph = {};
   const parsedFiles = new Map();
+  const sourceByFile = new Map();
 
   for (const file of files) {
     const filePath = file.filePath || path.join(resolvedRoot, file.relativePath);
@@ -3036,6 +3117,7 @@ async function scanFiles(rootDir, files, options = {}) {
     }
 
     try {
+      sourceByFile.set(filePath, parsed.sourceCode);
       parsedFiles.set(filePath, {
         sourceCode: parsed.sourceCode,
         importLines: collectImportLineMap(parsed.tree, parsed.sourceCode)
@@ -3054,13 +3136,18 @@ async function scanFiles(rootDir, files, options = {}) {
   }
 
   findings.push(...taintViolationsToFindings(analyzeTaintGraph(projectGraph), parsedFiles));
-
-  return applyPolicy(dedupeFindings(findings), policy, resolvedRoot).sort((a, b) => {
+  const filteredFindings = applyPolicy(dedupeFindings(findings), policy, resolvedRoot);
+  const suppressionResult = suppressIgnoredFindings(filteredFindings, sourceByFile);
+  const sortedFindings = suppressionResult.findings.sort((a, b) => {
     if (a.filePath === b.filePath) {
       return a.line - b.line;
     }
 
     return a.filePath.localeCompare(b.filePath);
+  });
+
+  return attachScanMetadata(sortedFindings, {
+    suppressedIssues: suppressionResult.suppressed
   });
 }
 
@@ -3079,13 +3166,16 @@ async function scanProject(rootDir = process.cwd(), options = {}) {
     scanSupabaseMigrations(resolvedRoot, { policy })
   ]);
   const sourceFindings = await scanFiles(resolvedRoot, sourceFiles, { policy, warn: options.warn });
-
-  return applyPolicy([...sourceFindings, ...migrationFindings], policy, resolvedRoot).sort((a, b) => {
+  const finalFindings = applyPolicy([...sourceFindings, ...migrationFindings], policy, resolvedRoot).sort((a, b) => {
     if (a.filePath === b.filePath) {
       return a.line - b.line;
     }
 
     return a.filePath.localeCompare(b.filePath);
+  });
+
+  return attachScanMetadata(finalFindings, {
+    suppressedIssues: Array.isArray(sourceFindings.suppressedIssues) ? sourceFindings.suppressedIssues : []
   });
 }
 
@@ -3795,6 +3885,33 @@ function renderTriStateRiskScore(findings = []) {
   ].join("\n");
 }
 
+function renderSuppressionAuditNote(suppressedIssues = [], options = {}) {
+  if (!Array.isArray(suppressedIssues) || suppressedIssues.length === 0) {
+    return "";
+  }
+
+  const colorOptions = {
+    color: options.color,
+    noColor: options.noColor,
+    stream: options.stream || process.stdout
+  };
+  const plural = suppressedIssues.length === 1 ? "issue" : "issues";
+  const lines = [
+    colorize("warning", `Note: ${suppressedIssues.length} ${plural} suppressed via preflight-ignore directive${suppressedIssues.length === 1 ? "" : "s"}.`, colorOptions)
+  ];
+
+  for (const item of suppressedIssues.slice(0, 5)) {
+    lines.push(`  ignored ${item.ruleId} at ${item.filePath}:${item.line}`);
+  }
+
+  if (suppressedIssues.length > 5) {
+    lines.push(`  ...and ${suppressedIssues.length - 5} more suppressed issue(s)`);
+  }
+
+  lines.push("");
+  return `${lines.join("\n")}\n`;
+}
+
 function toSarifUri(filePath, rootDir) {
   const relativePath = path.relative(path.resolve(rootDir), filePath) || path.basename(filePath);
   return toPosix(relativePath);
@@ -4493,6 +4610,7 @@ async function runCli(argv = process.argv, options = {}) {
           relativePath: toPosix(path.relative(rootDir, requestedPath))
         }], { policy: scanPolicy })
         : await scanProject(rootDir, { policy: scanPolicy });
+    let suppressedIssues = Array.isArray(findings.suppressedIssues) ? findings.suppressedIssues : [];
     let fixResult = null;
 
     if (options.fix) {
@@ -4515,6 +4633,7 @@ async function runCli(argv = process.argv, options = {}) {
             relativePath: toPosix(path.relative(rootDir, requestedPath))
           }], { policy: scanPolicy })
           : await scanProject(rootDir, { policy: scanPolicy });
+      suppressedIssues = Array.isArray(findings.suppressedIssues) ? findings.suppressedIssues : [];
 
       const hasProAccess = hasProEngineAccess(process.env);
       const complexFindings = findings.filter(isComplexStructuralFinding);
@@ -4593,6 +4712,7 @@ async function runCli(argv = process.argv, options = {}) {
 
     if (options.fix) {
       process.stdout.write(renderTriStateRiskScore(findings));
+      process.stdout.write(renderSuppressionAuditNote(suppressedIssues, { color: options.color, stream: process.stdout }));
       if (!fixResult?.reported) {
         process.stdout.write(
           `PreFlight remediation attempted ${fixResult?.attempted || 0} fix(es): ` +
@@ -4605,6 +4725,7 @@ async function runCli(argv = process.argv, options = {}) {
       process.stdout.write(`${JSON.stringify(findings, null, 2)}\n`);
     } else {
       process.stdout.write(renderTriStateRiskScore(findings));
+      process.stdout.write(renderSuppressionAuditNote(suppressedIssues, { color: options.color, stream: process.stdout }));
       process.stdout.write(renderReport(findings, { color: options.color, stream: process.stdout }));
     }
 

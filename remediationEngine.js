@@ -14,6 +14,8 @@ const Language = ParserBinding.Language || ParserBinding.default?.Language;
 const OpenAI = OpenAIImport.default || OpenAIImport;
 
 const SQL_KEYWORD_PATTERN = /\b(?:SELECT|INSERT|UPDATE|DELETE)\b/i;
+const SQL_QUERY_FRAGMENT_PATTERN =
+  /\bSELECT\b[\s\S]{0,240}\bFROM\b|\bINSERT\s+INTO\b|\bUPDATE\b[\s\S]{0,240}\bSET\b|\bDELETE\s+FROM\b/i;
 const SURGICAL_LLM_SYSTEM_PROMPT =
   "You are a specialized code refactoring utility. Convert the provided insecure JavaScript/TypeScript string concatenation into a completely secure, parameterized query format using standard placeholder symbols ($1, $2, etc.). Return ONLY the executable, corrected code fragment. Do not output markdown code blocks, backticks, or text explanations. CRITICAL: Minimize internal reasoning steps. Generate the target payload immediately. Do not append conversational preambles or post-analysis text.";
 const DEFAULT_GEMINI_MODEL = "gemini-1.5-flash";
@@ -147,8 +149,18 @@ function getFieldNode(node, fieldName) {
   return null;
 }
 
+function textLooksLikeSqlQuery(text) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  return SQL_QUERY_FRAGMENT_PATTERN.test(normalized);
+}
+
+function textStartsWithSqlStatement(text) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  return /^(?:SELECT\b[\s\S]{0,240}\bFROM\b|INSERT\s+INTO\b|UPDATE\b[\s\S]{0,240}\bSET\b|DELETE\s+FROM\b)/i.test(normalized);
+}
+
 function nodeContainsSqlKeyword(node, sourceCode) {
-  return Boolean(node && SQL_KEYWORD_PATTERN.test(getNodeText(node, sourceCode)));
+  return Boolean(node && textLooksLikeSqlQuery(getNodeText(node, sourceCode)));
 }
 
 function nodeContainsTemplateInterpolation(node) {
@@ -199,21 +211,17 @@ function findSqlConcatenations(node, sourceCode, matches = []) {
   if (node.type === "binary_expression" && getOperator(node, sourceCode) === "+") {
     const left = getFieldNode(node, "left");
     const right = getFieldNode(node, "right");
+    const expressionText = getNodeText(node, sourceCode);
 
     if (
-      (nodeContainsSqlKeyword(left, sourceCode) && nodeRepresentsDynamicSqlSegment(right)) ||
-      (nodeContainsSqlKeyword(right, sourceCode) && nodeRepresentsDynamicSqlSegment(left))
+      textLooksLikeSqlQuery(expressionText) &&
+      (
+        (nodeContainsSqlKeyword(left, sourceCode) && nodeRepresentsDynamicSqlSegment(right)) ||
+        (nodeContainsSqlKeyword(right, sourceCode) && nodeRepresentsDynamicSqlSegment(left))
+      )
     ) {
       matches.push(makeMatch(node, sourceCode));
     }
-  }
-
-  if (
-    node.type === "template_string" &&
-    nodeContainsSqlKeyword(node, sourceCode) &&
-    nodeContainsTemplateInterpolation(node)
-  ) {
-    matches.push(makeMatch(node, sourceCode));
   }
 
   for (let index = 0; index < node.namedChildCount; index += 1) {
@@ -307,11 +315,11 @@ function extractStandaloneSqlText(proposedFix) {
   }
 
   const quotedMatch = trimmed.match(/^(['"`])([\s\S]*)\1$/);
-  if (quotedMatch && SQL_KEYWORD_PATTERN.test(quotedMatch[2])) {
+  if (quotedMatch && textStartsWithSqlStatement(quotedMatch[2])) {
     return quotedMatch[2].trim().replace(/;+\s*$/, "");
   }
 
-  if (/^(?:SELECT|INSERT|UPDATE|DELETE)\b/i.test(trimmed)) {
+  if (textStartsWithSqlStatement(trimmed)) {
     return trimmed.replace(/;+\s*$/, "");
   }
 
@@ -428,7 +436,7 @@ async function buildLocalSqlParameterizedFix(rawSnippet) {
     }
 
     const normalizedSqlText = sqlText.trim().replace(/;+\s*$/, "");
-    if (!normalizedSqlText || !SQL_KEYWORD_PATTERN.test(normalizedSqlText) || bindings.length === 0) {
+    if (!normalizedSqlText || !textLooksLikeSqlQuery(normalizedSqlText) || bindings.length === 0) {
       return null;
     }
 

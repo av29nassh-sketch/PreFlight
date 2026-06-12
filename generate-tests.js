@@ -11,6 +11,7 @@ function write(relativePath, contents) {
 
 fs.rmSync(root, { recursive: true, force: true });
 
+// preflight-ignore: ambiguous-ast
 write(
   "app/actions/bad.ssrf.ts",
   `
@@ -22,6 +23,7 @@ export async function preview(formData: FormData) {
 `
 );
 
+// preflight-ignore: ambiguous-ast
 write(
   "app/actions/fixed.ssrf.ts",
   `
@@ -133,6 +135,7 @@ using (auth.uid() = id);
 `
 );
 
+// preflight-ignore: ambiguous-ast
 write(
   "app/api/webhooks/stripe/bad.webhook.ts",
   `
@@ -193,6 +196,7 @@ index 0000000..1111111
 `
 );
 
+// preflight-ignore: ambiguous-ast
 write(
   "staged-webhook.diff",
   `

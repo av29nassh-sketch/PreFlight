@@ -406,6 +406,19 @@ describe("PreFlight Check", () => {
     );
   });
 
+  test("scanProject ignores default *.test.js and *.spec.js files during traversal", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "src/live.js": "const safe = true;\n",
+      "src/insecure.test.js": "const query = \"SELECT * FROM users WHERE id = \" + userId;\n",
+      "src/insecure.spec.js": "const stripe_key = \"" + STRIPE_KEY + "\";\n"
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toHaveLength(0);
+  });
+
   test("flags public tables created without RLS being enabled", async () => {
     const { scanProject } = require("../index");
     const root = makeProject({
@@ -2102,6 +2115,60 @@ describe("PreFlight Check", () => {
       ])
     );
     expect(findings.some((finding) => finding.ruleId === "ssrf")).toBe(false);
+  });
+
+  test("scanProject suppresses ambiguous-ast findings when preceded by a preflight-ignore directive", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "import { normalizeTarget } from '../../lib/url-tools';",
+        "export async function preview(req) {",
+        "  \"use server\";",
+        "  const body = await req.json();",
+        "  // preflight-ignore: ambiguous-ast",
+        "  const target = normalizeTarget(body.url);",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n"),
+      "lib/url-tools.ts": "export const normalizeTarget = (url) => url;\n"
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toHaveLength(0);
+    expect(findings.suppressedIssues).toEqual([
+      expect.objectContaining({
+        ruleId: "ambiguous-ast",
+        filePath: path.join(root, "app/actions/proxy.ts"),
+        line: 6,
+        directiveLine: 5
+      })
+    ]);
+  });
+
+  test("scan command exits cleanly and logs an audit note when a preflight-ignore directive suppresses a finding", () => {
+    const root = makeProject({
+      "app/actions/proxy.ts": [
+        "import { normalizeTarget } from '../../lib/url-tools';",
+        "export async function preview(req) {",
+        "  \"use server\";",
+        "  const body = await req.json();",
+        "  // preflight-ignore: ambiguous-ast",
+        "  const target = normalizeTarget(body.url);",
+        "  return fetch(target);",
+        "}",
+        ""
+      ].join("\n"),
+      "lib/url-tools.ts": "export const normalizeTarget = (url) => url;\n"
+    });
+
+    const result = runNode([path.join(__dirname, "..", "index.js"), "scan", root, "--no-color"], root);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Note: 1 issue suppressed via preflight-ignore directive.");
+    expect(result.stdout).toContain("ignored ambiguous-ast");
+    expect(result.stdout).toContain("PreFlight Check found 0 issues.");
   });
 
   test("backend SSRF scan surrenders on tainted dynamic dispatch", async () => {
