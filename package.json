@@ -23,7 +23,7 @@
     "cli"
   ],
   "files": [
-    "bin/preflight.js",
+    "bin",
     "index.js",
     "logger.js",
     "remediationEngine.js",
