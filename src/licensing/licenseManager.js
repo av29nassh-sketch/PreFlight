@@ -5,7 +5,7 @@ const path = require("node:path");
 
 const CONFIG_DIR = ".preflight";
 const CONFIG_FILE = "config.json";
-const FREE_FIX_LIMIT = 5;
+const FREE_FIX_LIMIT = 10;
 const BETA_LICENSE_PREFIX = "PREFLIGHT-BETA-";
 const BETA_LICENSE_WINDOW_DAYS = 14;
 const BETA_LICENSE_WINDOW_MS = BETA_LICENSE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
@@ -31,7 +31,7 @@ const TRI_STATE_RISK_SCORE = Object.freeze({
 const LEMON_SQUEEZY_ACTIVATE_URL = "https://api.lemonsqueezy.com/v1/licenses/activate";
 const LEMON_SQUEEZY_VALIDATE_URL = "https://api.lemonsqueezy.com/v1/licenses/validate";
 const FREE_FIXES_EXHAUSTED_MESSAGE =
-  "\u26a0\ufe0f Free fixes exhausted (5/5). Upgrade to PreFlight Pro for unlimited AI auto-fixes for a one-time payment of $49 / \u20b91999: https://yourwebsite.com/buy";
+  "\u26a0\ufe0f Free fixes exhausted (10/10). Upgrade to PreFlight Pro for unlimited AI auto-fixes for a one-time payment of $49 / \u20b91999: https://yourwebsite.com/buy";
 const INVALID_LICENSE_MESSAGE =
   "\u274c License is inactive or invalid. Please run 'preflight activate <key>' with a valid key.";
 const EXPIRED_BETA_LICENSE_MESSAGE =

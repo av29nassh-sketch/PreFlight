@@ -133,7 +133,7 @@ function registerMcpTools(server, options = {}) {
         rootDir: options.rootDir || rootDir || process.cwd()
       });
 
-      if (permission.tier === "free") {
+      if (permission.tier === "free" && (fixResult?.applied || 0) > 0) {
         await recordFreeFixUsage();
       }
 

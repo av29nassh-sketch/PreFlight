@@ -6,7 +6,7 @@ const roots = [];
 const ACTIVATION_MESSAGE = "\u2705 PreFlight Pro activated successfully! Unlimited AI auto-fixes unlocked.";
 const EMAIL_MISMATCH_MESSAGE = "\u274c Email does not match the purchase record.";
 const EXHAUSTED_MESSAGE =
-  "\u26a0\ufe0f Free fixes exhausted (5/5). Upgrade to PreFlight Pro for unlimited AI auto-fixes for a one-time payment of $49 / \u20b91999: https://yourwebsite.com/buy";
+  "\u26a0\ufe0f Free fixes exhausted (10/10). Upgrade to PreFlight Pro for unlimited AI auto-fixes for a one-time payment of $49 / \u20b91999: https://yourwebsite.com/buy";
 const BETA_ACTIVE_RECEIPT =
   "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes (Expires 14 days from issue date).";
 const ORG_ACCOUNT_MESSAGE =
@@ -138,7 +138,7 @@ describe("licenseManager", () => {
     await expect(verifyFixPermission({ cwd: root, homeDir, env: {} })).resolves.toEqual({
       allowed: true,
       tier: "free",
-      remaining: 5
+      remaining: 10
     });
   });
 
@@ -226,7 +226,7 @@ describe("licenseManager", () => {
     });
   });
 
-  test("allows free fixes while fewer than five have been used", async () => {
+  test("allows free fixes while fewer than ten have been used", async () => {
     const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
     const homeDir = makeHome();
     await writeConfig({ freeFixesUsed: 2, licenseKey: null, instanceId: null }, { homeDir });
@@ -234,14 +234,14 @@ describe("licenseManager", () => {
     await expect(verifyFixPermission({ homeDir })).resolves.toEqual({
       allowed: true,
       tier: "free",
-      remaining: 3
+      remaining: 8
     });
   });
 
-  test("blocks free fixes after the fifth use", async () => {
+  test("blocks free fixes after the tenth use", async () => {
     const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
     const homeDir = makeHome();
-    await writeConfig({ freeFixesUsed: 5, licenseKey: null, instanceId: null }, { homeDir });
+    await writeConfig({ freeFixesUsed: 10, licenseKey: null, instanceId: null }, { homeDir });
 
     await expect(verifyFixPermission({ homeDir })).resolves.toEqual({
       allowed: false,

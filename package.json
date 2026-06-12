@@ -1,6 +1,6 @@
 {
   "name": "preflight-pro",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "The local security gate for AI-generated code.",
   "license": "BUSL-1.1",
   "type": "commonjs",

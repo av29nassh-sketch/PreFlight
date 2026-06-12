@@ -84,7 +84,7 @@ describe("PreFlight MCP server tools", () => {
       }
     };
     const message =
-      "\u26a0\ufe0f Free fixes exhausted (5/5). Upgrade to PreFlight Pro for unlimited AI auto-fixes for a one-time payment of $49 / \u20b91999: https://yourwebsite.com/buy";
+      "\u26a0\ufe0f Free fixes exhausted (10/10). Upgrade to PreFlight Pro for unlimited AI auto-fixes for a one-time payment of $49 / \u20b91999: https://yourwebsite.com/buy";
     let fixCalled = false;
 
     registerMcpTools(fakeServer, {
@@ -135,7 +135,7 @@ describe("PreFlight MCP server tools", () => {
       renderReport: () => "scan report\n",
       scanProject: async () => [{ ruleId: "frontend-secret", fix: { kind: "credential" } }],
       scanProjectDiff: async () => [],
-      verifyFixPermission: async () => ({ allowed: true, tier: "free", remaining: 4 })
+      verifyFixPermission: async () => ({ allowed: true, tier: "free", remaining: 9 })
     });
 
     const fixTool = registered.find((tool) => tool.name === "preflight_fix");
@@ -144,6 +144,40 @@ describe("PreFlight MCP server tools", () => {
     expect(recorded).toBe(true);
     expect(result).toEqual({
       content: [{ type: "text", text: "PreFlight remediation attempted 2 fix(es): 1 applied, 1 skipped, 0 unsupported.\n" }]
+    });
+  });
+
+  test("preflight_fix does not record usage when no free-tier fixes are applied", async () => {
+    const { registerMcpTools } = require("../src/mcp/server");
+    const registered = [];
+    const fakeServer = {
+      registerTool(name, definition, handler) {
+        registered.push({ name, definition, handler });
+      }
+    };
+    let recorded = false;
+
+    registerMcpTools(fakeServer, {
+      applyScanFixes: async () => ({ attempted: 1, applied: 0, skipped: 1, unsupported: 0 }),
+      auditDependencies: async () => ({ vulnerabilities: { total: 0 }, metadata: {} }),
+      cwd: process.cwd(),
+      loadPreflightPolicy: async () => ({}),
+      recordFreeFixUsage: async () => {
+        recorded = true;
+      },
+      renderAuditReport: () => "audit report\n",
+      renderReport: () => "scan report\n",
+      scanProject: async () => [{ ruleId: "frontend-secret", fix: { kind: "credential" } }],
+      scanProjectDiff: async () => [],
+      verifyFixPermission: async () => ({ allowed: true, tier: "free", remaining: 9 })
+    });
+
+    const fixTool = registered.find((tool) => tool.name === "preflight_fix");
+    const result = await fixTool.handler({ directory: ".", diff: false });
+
+    expect(recorded).toBe(false);
+    expect(result).toEqual({
+      content: [{ type: "text", text: "PreFlight remediation attempted 1 fix(es): 0 applied, 1 skipped, 0 unsupported.\n" }]
     });
   });
 

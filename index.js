@@ -41,6 +41,7 @@ const {
 const {
   activateLicenseKey: activateDefaultLicenseKey,
   getRepositoryContext: getDefaultRepositoryContext,
+  recordFreeFixUsage: recordDefaultFreeFixUsage,
   resolveStoredLicenseKey: resolveDefaultStoredLicenseKey,
   TRI_STATE_RISK_SCORE,
   verifyFixPermission: verifyDefaultFixPermission
@@ -4337,6 +4338,7 @@ async function runCli(argv = process.argv, options = {}) {
   const verifyFixPermission = options.verifyFixPermission || verifyDefaultFixPermission;
   const reportTelemetry = options.reportTelemetry || reportTelemetryDefault;
   const routeDeepRemediation = options.routeDeepRemediation || routeDeepRemediationDefault;
+  const recordFreeFixUsage = options.recordFreeFixUsage || recordDefaultFreeFixUsage;
   const resolveStoredLicenseKey = options.resolveStoredLicenseKey || resolveDefaultStoredLicenseKey;
   const startCliLogin = options.startCliLogin || startDefaultCliLogin;
   const getRepositoryContextForTelemetry = options.getRepositoryContext;
@@ -4581,8 +4583,9 @@ async function runCli(argv = process.argv, options = {}) {
     const requestedStats = await fs.stat(requestedPath);
     const isSingleFileScan = requestedStats.isFile();
     const rootDir = isSingleFileScan ? process.cwd() : requestedPath;
+    let permission = null;
     if (options.fix) {
-      const permission = await verifyFixPermission({ cwd: rootDir });
+      permission = await verifyFixPermission({ cwd: rootDir });
       if (!permission.allowed) {
         process.stderr.write(`${permission.message}\n`);
         process.exitCode = 1;
@@ -4735,6 +4738,10 @@ async function runCli(argv = process.argv, options = {}) {
         fixResult,
         rootDir
       });
+    }
+
+    if (options.fix && permission?.tier === "free" && (fixResult?.applied || 0) > 0) {
+      await recordFreeFixUsage();
     }
 
     const licenseKey = await resolveStoredLicenseKey({ env: process.env });
