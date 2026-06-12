@@ -12,11 +12,6 @@
   "bugs": {
     "url": "https://github.com/av29nassh-sketch/PreFlight/issues"
   },
-  "publishConfig": {
-    "access": "public",
-    "tag": "beta",
-    "registry": "https://registry.npmjs.org/"
-  },
   "keywords": [
     "preflight",
     "security",
