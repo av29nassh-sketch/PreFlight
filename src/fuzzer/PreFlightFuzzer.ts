@@ -47,6 +47,31 @@ function nodeText(node: CPGNode | undefined): string {
   return node?.text || "";
 }
 
+function normalizeIgnoreRule(rawRule: string): string {
+  return rawRule.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function isIgnoredForVulnerability(node: CPGNode | undefined, vulnerabilityType?: FuzzVulnerabilityType): boolean {
+  if (!node) {
+    return false;
+  }
+
+  if (node.ignored) {
+    return true;
+  }
+
+  const ignoreRules = node.ignoreRules || [];
+  if (ignoreRules.includes("all") || ignoreRules.includes("fuzzer")) {
+    return true;
+  }
+
+  return vulnerabilityType ? ignoreRules.includes(normalizeIgnoreRule(vulnerabilityType)) : false;
+}
+
+function traceContainsIgnoredNode(trace: CPGNode[], vulnerabilityType: FuzzVulnerabilityType): boolean {
+  return trace.some((node) => isIgnoredForVulnerability(node, vulnerabilityType));
+}
+
 function inferKeyFromSourceText(text: string): string[] {
   const keys = new Set<string>();
   const propertyMatches = text.matchAll(/\b(?:query|body|params|searchParams)\s*\.\s*([A-Za-z_$][\w$]*)/g);
@@ -139,14 +164,17 @@ export class PreFlightFuzzer {
   constructor(private readonly cpg: PreFlightCPG) {}
 
   extractEntryPoints(): FuzzEntryPoint[] {
-    return this.cpg.findTaintSources().map((sourceNode) => {
-      const inferredKeys = inferKeyFromSourceText(nodeText(sourceNode));
-      return {
-        sourceNode,
-        inferredKeys,
-        inferredSchema: Object.fromEntries(inferredKeys.map((key) => [key, "string" as const]))
-      };
-    });
+    return this.cpg
+      .findTaintSources()
+      .filter((sourceNode) => !isIgnoredForVulnerability(sourceNode))
+      .map((sourceNode) => {
+        const inferredKeys = inferKeyFromSourceText(nodeText(sourceNode));
+        return {
+          sourceNode,
+          inferredKeys,
+          inferredSchema: Object.fromEntries(inferredKeys.map((key) => [key, "string" as const]))
+        };
+      });
   }
 
   generatePayloadsForSink(sinkNodeId: string | number): FuzzPayload[] {
@@ -157,6 +185,10 @@ export class PreFlightFuzzer {
   fuzzAll(): FuzzResult[] {
     const results: FuzzResult[] = [];
     for (const source of this.cpg.findTaintSources()) {
+      if (isIgnoredForVulnerability(source)) {
+        continue;
+      }
+
       const trace = this.cpg.traceTaintDetailed(source.id);
       if (trace.reachedSink && trace.sink) {
         const result = this.fuzzTrace(source, trace.sink, trace);
@@ -176,6 +208,10 @@ export class PreFlightFuzzer {
       return null;
     }
 
+    if (isIgnoredForVulnerability(source)) {
+      return null;
+    }
+
     const trace = this.cpg.traceTaintDetailed(source.id);
     if (!trace.reachedSink || !trace.sink || trace.sink.id !== sink.id) {
       return null;
@@ -187,6 +223,10 @@ export class PreFlightFuzzer {
   private fuzzTrace(source: CPGNode, sink: CPGNode, trace: TaintTraceResult): FuzzResult | null {
     const executionTrail = trace.path.length > 0 ? trace.path : [source, sink];
     for (const payload of payloadsForSink(sink)) {
+      if (traceContainsIgnoredNode(executionTrail, payload.vulnerabilityType) || isIgnoredForVulnerability(sink, payload.vulnerabilityType)) {
+        continue;
+      }
+
       if (!dangerousPayloadSurvives(payload, executionTrail, sink)) {
         continue;
       }

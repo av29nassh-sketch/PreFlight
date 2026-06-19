@@ -58,6 +58,8 @@ export interface CPGNode {
   isTaintSource?: boolean;
   isCriticalSink?: boolean;
   sinkKind?: string;
+  ignored?: boolean;
+  ignoreRules?: string[];
 }
 
 export interface CPGEdge {

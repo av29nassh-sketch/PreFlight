@@ -34,6 +34,7 @@ const AUTH_BOUNDARY_SINK_PATTERN =
   /\b(?:authorize|authenticate|requireRole|requirePermission|checkPermission|verifySession|validateSession|isAdmin|hasRole)\s*\(/i;
 
 const SQL_TEXT_PATTERN = /\b(?:select|insert|update|delete|drop|alter)\b[\s\S]*(?:\+|\$\{)/i;
+const PREFLIGHT_IGNORE_PATTERN = /preflight-ignore:\s*([A-Z0-9_,\-\s]+)/gi;
 
 function rootNodeFromInput(input: TreeSitterInput): TreeSitterSyntaxNode {
   return "rootNode" in input ? input.rootNode : input;
@@ -79,6 +80,17 @@ function namedChildren(node: TreeSitterSyntaxNode): TreeSitterSyntaxNode[] {
   return children;
 }
 
+function allChildren(node: TreeSitterSyntaxNode): TreeSitterSyntaxNode[] {
+  const children: TreeSitterSyntaxNode[] = [];
+  for (let index = 0; index < node.childCount; index += 1) {
+    const child = node.child(index);
+    if (child) {
+      children.push(child);
+    }
+  }
+  return children;
+}
+
 function sourceText(node: TreeSitterSyntaxNode, sourceCode: string): string {
   return sourceCode ? sourceCode.slice(node.startIndex, node.endIndex) : "";
 }
@@ -115,6 +127,99 @@ function collectIdentifierReferences(
 
 function stableSyntaxKey(filePath: string, node: TreeSitterSyntaxNode): string {
   return `${filePath}:${node.startIndex}:${node.endIndex}:${node.type}`;
+}
+
+function getParent(node: TreeSitterSyntaxNode): TreeSitterSyntaxNode | null {
+  const parent = (node as TreeSitterSyntaxNode & { parent?: TreeSitterSyntaxNode | null }).parent;
+  return parent || null;
+}
+
+function isCommentNode(node: TreeSitterSyntaxNode): boolean {
+  return node.type === "comment" || /comment/i.test(node.type);
+}
+
+function normalizeIgnoreRule(rawRule: string): string {
+  return rawRule.trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function parseIgnoreRules(commentText: string): string[] {
+  const rules = new Set<string>();
+  for (const match of commentText.matchAll(PREFLIGHT_IGNORE_PATTERN)) {
+    const rawRules = match[1] || "";
+    for (const rawRule of rawRules.split(/[,\s]+/)) {
+      const normalizedRule = normalizeIgnoreRule(rawRule);
+      if (normalizedRule) {
+        rules.add(normalizedRule);
+      }
+    }
+  }
+
+  return [...rules];
+}
+
+function isImmediatelyBeforeComment(commentNode: TreeSitterSyntaxNode, targetNode: TreeSitterSyntaxNode): boolean {
+  if (!commentNode.endPosition || !targetNode.startPosition) {
+    return commentNode.endIndex <= targetNode.startIndex;
+  }
+
+  const lineDistance = targetNode.startPosition.row - commentNode.endPosition.row;
+  return lineDistance >= 0 && lineDistance <= 1;
+}
+
+function previousSibling(parent: TreeSitterSyntaxNode, node: TreeSitterSyntaxNode): TreeSitterSyntaxNode | null {
+  const siblings = allChildren(parent);
+  const nodeIndex = siblings.findIndex(
+    (sibling) =>
+      sibling === node ||
+      (sibling.startIndex === node.startIndex && sibling.endIndex === node.endIndex && sibling.type === node.type)
+  );
+
+  if (nodeIndex <= 0) {
+    return null;
+  }
+
+  return siblings[nodeIndex - 1] || null;
+}
+
+function collectPrecedingIgnoreRules(node: TreeSitterSyntaxNode, sourceCode: string): string[] {
+  const rules = new Set<string>();
+  let currentNode: TreeSitterSyntaxNode | null = node;
+
+  while (currentNode) {
+    const parent = getParent(currentNode);
+    if (!parent) {
+      break;
+    }
+
+    const previous = previousSibling(parent, currentNode);
+    if (previous && isCommentNode(previous) && isImmediatelyBeforeComment(previous, currentNode)) {
+      for (const rule of parseIgnoreRules(sourceText(previous, sourceCode))) {
+        rules.add(rule);
+      }
+    }
+
+    currentNode = parent;
+  }
+
+  return [...rules];
+}
+
+function hasSuppressionRule(ignoreRules: string[] | undefined, vulnerabilityType?: string): boolean {
+  if (!ignoreRules || ignoreRules.length === 0) {
+    return false;
+  }
+
+  if (ignoreRules.includes("all") || ignoreRules.includes("fuzzer")) {
+    return true;
+  }
+
+  return vulnerabilityType ? ignoreRules.includes(normalizeIgnoreRule(vulnerabilityType)) : false;
+}
+
+function markIgnoredForRule(cpgNode: CPGNode, vulnerabilityType?: string): void {
+  if (hasSuppressionRule(cpgNode.ignoreRules, vulnerabilityType)) {
+    cpgNode.ignored = true;
+  }
 }
 
 export class PreFlightCPG {
@@ -309,26 +414,31 @@ export class PreFlightCPG {
 
     if (canBeTaintSource && SOURCE_PATTERN.test(text)) {
       cpgNode.isTaintSource = true;
+      markIgnoredForRule(cpgNode);
     }
 
     if (node.type === "call_expression" && CRITICAL_SINK_PATTERN.test(text)) {
       cpgNode.isCriticalSink = true;
       cpgNode.sinkKind = "critical-call";
+      markIgnoredForRule(cpgNode, "SQL_INJECTION");
     }
 
     if (node.type === "call_expression" && FILE_SYSTEM_SINK_PATTERN.test(text)) {
       cpgNode.isCriticalSink = true;
       cpgNode.sinkKind = "file-system";
+      markIgnoredForRule(cpgNode, "PATH_TRAVERSAL");
     }
 
     if (node.type === "call_expression" && AUTH_BOUNDARY_SINK_PATTERN.test(text)) {
       cpgNode.isCriticalSink = true;
       cpgNode.sinkKind = "auth-boundary";
+      markIgnoredForRule(cpgNode, "AUTH_BYPASS");
     }
 
     if ((node.type === "binary_expression" || node.type === "template_string") && SQL_TEXT_PATTERN.test(text)) {
       cpgNode.isCriticalSink = true;
       cpgNode.sinkKind = "raw-sql-construction";
+      markIgnoredForRule(cpgNode, "SQL_INJECTION");
     }
   }
 
@@ -438,6 +548,7 @@ export class PreFlightCPG {
     const numericId = this.nodeOrder.length;
     const id = `cpg:${numericId}`;
     const text = sourceText(syntaxNode, fileIndex.sourceCode);
+    const ignoreRules = collectPrecedingIgnoreRules(syntaxNode, fileIndex.sourceCode);
     const node: CPGNode = {
       id,
       numericId,
@@ -449,7 +560,13 @@ export class PreFlightCPG {
       line: syntaxNode.startPosition ? syntaxNode.startPosition.row + 1 : undefined,
       column: syntaxNode.startPosition ? syntaxNode.startPosition.column + 1 : undefined,
       text: text || undefined,
-      symbol: symbolFromNode(syntaxNode, fileIndex.sourceCode)
+      symbol: symbolFromNode(syntaxNode, fileIndex.sourceCode),
+      ...(ignoreRules.length > 0
+        ? {
+            ignoreRules,
+            ignored: hasSuppressionRule(ignoreRules)
+          }
+        : {})
     };
 
     this.nodes.set(id, node);
