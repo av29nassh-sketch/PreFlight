@@ -8,10 +8,13 @@ const MAX_MESSAGE_COUNT = 8;
 const MAX_MESSAGE_CHARS = 120000;
 const MAX_SYSTEM_CHARS = 12000;
 const MAX_ALLOWED_TOKENS = 2500;
+const DEFAULT_REMEDIATION_MAX_TOKENS = 1800;
 const ANTHROPIC_TIMEOUT_MS = 55000;
 const BETA_KEY_TTL_DAYS = 14;
 const SUPABASE_BETA_KEYS_TABLE = "preflight_beta_keys";
 const PREFLIGHT_BETA_KEY_PATTERN = /^PREFLIGHT-BETA-\d{8}-[A-Z0-9]+$/i;
+const FUZZER_REMEDIATION_SYSTEM_PROMPT =
+  "You are an expert security engineer. Given a vulnerable code snippet, execution trail, and breaking payload, return ONLY the raw, patched source code. Do not use markdown formatting. Fix the vulnerability by parameterizing the input.";
 
 const app = express();
 app.disable("x-powered-by");
@@ -296,6 +299,120 @@ function validateRequestBody(body) {
   return null;
 }
 
+function validateStringField(body, fieldName, maxLength) {
+  const value = body[fieldName];
+  if (typeof value !== "string" || !value.trim()) {
+    return `${fieldName} must be a non-empty string.`;
+  }
+
+  if (value.length > maxLength) {
+    return `${fieldName} must be ${maxLength} characters or fewer.`;
+  }
+
+  return null;
+}
+
+function normalizeExecutionTrail(executionTrail) {
+  if (!Array.isArray(executionTrail)) {
+    return null;
+  }
+
+  if (executionTrail.length > 64) {
+    return null;
+  }
+
+  const normalizedTrail = [];
+  for (const item of executionTrail) {
+    if (typeof item !== "string") {
+      return null;
+    }
+
+    normalizedTrail.push(item.slice(0, 2000));
+  }
+
+  return normalizedTrail;
+}
+
+function buildFuzzerRemediationPrompt({ filePath, sourceCode, vulnerabilityType, breakingPayload, executionTrail }) {
+  return [
+    "Fix this vulnerability.",
+    `File: ${filePath}`,
+    `Type: ${vulnerabilityType}`,
+    `Payload: ${breakingPayload}`,
+    "Trail:",
+    executionTrail.length > 0 ? executionTrail.join("\n") : "No execution trail provided.",
+    "",
+    "Code:",
+    sourceCode
+  ].join("\n");
+}
+
+function normalizeRemediationRequestBody(body) {
+  const legacyBodyError = validateRequestBody(body);
+  if (!legacyBodyError) {
+    const { max_tokens, messages, system, temperature } = body;
+    return {
+      requestPayload: {
+        model: MODEL_NAME,
+        max_tokens,
+        system,
+        messages,
+        ...(temperature !== undefined ? { temperature } : {})
+      }
+    };
+  }
+
+  if (!isPlainObject(body)) {
+    return { error: "Request body must be a JSON object." };
+  }
+
+  const filePathError = validateStringField(body, "filePath", 600);
+  if (filePathError) {
+    return { error: filePathError };
+  }
+
+  const sourceCodeError = validateStringField(body, "sourceCode", MAX_MESSAGE_CHARS);
+  if (sourceCodeError) {
+    return { error: sourceCodeError };
+  }
+
+  const vulnerabilityTypeError = validateStringField(body, "vulnerabilityType", 120);
+  if (vulnerabilityTypeError) {
+    return { error: vulnerabilityTypeError };
+  }
+
+  const breakingPayloadError = validateStringField(body, "breakingPayload", 4000);
+  if (breakingPayloadError) {
+    return { error: breakingPayloadError };
+  }
+
+  const executionTrail = normalizeExecutionTrail(body.executionTrail);
+  if (!executionTrail) {
+    return { error: "executionTrail must be an array of strings." };
+  }
+
+  return {
+    requestPayload: {
+      model: MODEL_NAME,
+      max_tokens: DEFAULT_REMEDIATION_MAX_TOKENS,
+      system: FUZZER_REMEDIATION_SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: buildFuzzerRemediationPrompt({
+            filePath: body.filePath,
+            sourceCode: body.sourceCode,
+            vulnerabilityType: body.vulnerabilityType,
+            breakingPayload: body.breakingPayload,
+            executionTrail
+          })
+        }
+      ],
+      temperature: 0
+    }
+  };
+}
+
 app.get("/health", (_req, res) => {
   res.status(200).json({ status: "healthy" });
 });
@@ -306,25 +423,14 @@ async function handleRemediationRequest(req, res) {
     return res.status(500).json({ error: "Deep reasoning engine communication failed." });
   }
 
-  const bodyError = validateRequestBody(req.body);
-  if (bodyError) {
-    return res.status(400).json({ error: bodyError });
+  const normalized = normalizeRemediationRequestBody(req.body);
+  if (normalized.error) {
+    return res.status(400).json({ error: normalized.error });
   }
-
-  const { max_tokens, messages, system, temperature } = req.body;
 
   try {
     const anthropic = createAnthropicClient();
-    const requestPayload = {
-      model: MODEL_NAME,
-      max_tokens,
-      system,
-      messages
-    };
-
-    if (temperature !== undefined) {
-      requestPayload.temperature = temperature;
-    }
+    const requestPayload = normalized.requestPayload;
 
     const response = await anthropic.messages.create(requestPayload, {
       timeout: ANTHROPIC_TIMEOUT_MS
