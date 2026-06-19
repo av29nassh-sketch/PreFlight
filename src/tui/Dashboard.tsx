@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import type { ReleaseFuzzerFinding } from "../fuzzer/runFuzzer";
 import type { ReleaseGateFinding, ReleaseGateScanResult, ReleaseGateStatus } from "../release-gate/model";
-import { remediateFuzzerFinding } from "../remediation/patcher";
+import { MISSING_PRO_LICENSE_MESSAGE, remediateFuzzerFinding } from "../remediation/patcher";
 import { applyAutoPatch } from "../release-gate/patcher";
 
 type PatchState = "idle" | "patching" | "success" | "error";
@@ -300,7 +300,8 @@ export function Dashboard({ result, inputEnabled = true, onPatchApplied }: Dashb
       setPatchMessage("MCP successfully patched vulnerability!");
     } catch (error) {
       setPatchState("error");
-      setPatchMessage(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setPatchMessage(message.includes("Pro license") ? MISSING_PRO_LICENSE_MESSAGE : message);
     }
   }
 

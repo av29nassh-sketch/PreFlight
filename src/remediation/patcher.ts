@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveLicenseKey as resolveStoredOrEnvLicenseKey } from "../config/auth";
 
 const { parseJavaScript } = require("../../taintTracker");
 
 const DEFAULT_REMEDIATION_ENDPOINT = "https://preflight-vibe.vercel.app/api/v1/remediation";
+export const MISSING_PRO_LICENSE_MESSAGE = "Auto-Patch requires a Pro license. Run 'preflight auth <your-key>' to activate.";
 
 export interface FuzzerRemediationFinding {
   file: string;
@@ -32,10 +34,10 @@ function resolveEndpoint(): string {
   ).trim();
 }
 
-function resolveLicenseKey(): string {
-  const licenseKey = (process.env.PREFLIGHT_PRO_KEY || process.env.PREFLIGHT_PRO_LICENSE_KEY || "").trim();
+async function resolveLicenseKey(): Promise<string> {
+  const licenseKey = await resolveStoredOrEnvLicenseKey();
   if (!licenseKey) {
-    throw new Error("Fuzzer remediation requires PREFLIGHT_PRO_KEY.");
+    throw new Error(MISSING_PRO_LICENSE_MESSAGE);
   }
 
   return licenseKey;
@@ -192,7 +194,7 @@ async function assertSyntaxSafe(filePath: string, patchedCode: string): Promise<
 export async function remediateFuzzerFinding(finding: FuzzerRemediationFinding): Promise<boolean> {
   const filePath = path.resolve(finding.file);
   const sourceCode = fs.readFileSync(filePath, "utf8");
-  const licenseKey = resolveLicenseKey();
+  const licenseKey = await resolveLicenseKey();
   const response = await fetch(resolveEndpoint(), {
     method: "POST",
     headers: {
