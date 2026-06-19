@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import type { ReleaseFuzzerFinding } from "../fuzzer/runFuzzer";
 import type { ReleaseGateFinding, ReleaseGateScanResult, ReleaseGateStatus } from "../release-gate/model";
+import { remediateFuzzerFinding } from "../remediation/patcher";
 import { applyAutoPatch } from "../release-gate/patcher";
 
 type PatchState = "idle" | "patching" | "success" | "error";
@@ -70,10 +71,6 @@ function clampSelectedIndex(index: number, total: number): number {
   }
 
   return Math.max(0, Math.min(index, total - 1));
-}
-
-async function triggerPatcher(_finding: ReleaseFuzzerFinding): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 1200));
 }
 
 function FuzzerFindingItem({
@@ -257,14 +254,25 @@ export function Dashboard({ result, inputEnabled = true, onPatchApplied }: Dashb
 
     try {
       if (selected.kind === "fuzzer") {
-        await triggerPatcher(selected.finding);
+        const patched = await remediateFuzzerFinding({
+          ...selected.finding,
+          file: path.resolve(result.targetDir, selected.finding.file)
+        });
+        if (!patched) {
+          throw new Error("Fuzzer remediation did not apply a patch.");
+        }
+
         setHiddenFuzzerFindingKeys((current) => {
           const next = new Set(current);
           next.add(getFuzzerFindingKey(selected.finding));
           return next;
         });
+        if (onPatchApplied) {
+          await onPatchApplied();
+        }
+
         setPatchState("success");
-        setPatchMessage("Micro-fuzzer patch handoff queued.");
+        setPatchMessage("Micro-fuzzer remediation applied.");
         return;
       }
 
