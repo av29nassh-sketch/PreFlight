@@ -106,7 +106,7 @@ describe("PreFlight E2E security pipeline", () => {
 
     expect(remediated).toBe(true);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(capturedUrl).toBe("https://preflight-vibe.vercel.app/api/v1/remediation");
+    expect(capturedUrl).toBe("https://preflight-proxy.vercel.app/api/v1/remediation");
     expect(capturedBody).toMatchObject({
       filePath: routeFile,
       vulnerabilityType: "SQL_INJECTION",

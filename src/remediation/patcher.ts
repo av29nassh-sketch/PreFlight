@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveLicenseKey as resolveStoredOrEnvLicenseKey } from "../config/auth";
 
-const { parseJavaScript } = require("../../taintTracker");
+const { parseSourceForValidation } = require("../../remediationEngine");
 
-const DEFAULT_REMEDIATION_ENDPOINT = "https://preflight-vibe.vercel.app/api/v1/remediation";
+const DEFAULT_REMEDIATION_ENDPOINT = "https://preflight-proxy.vercel.app/api/v1/remediation";
 export const MISSING_PRO_LICENSE_MESSAGE = "Auto-Patch requires a Pro license. Run 'preflight auth <your-key>' to activate.";
 
 export interface FuzzerRemediationFinding {
@@ -185,7 +185,7 @@ async function assertSyntaxSafe(filePath: string, patchedCode: string): Promise<
     return;
   }
 
-  const tree = await parseJavaScript(patchedCode);
+  const tree = await parseSourceForValidation(patchedCode, filePath);
   if (hasParseError(tree?.rootNode)) {
     throw new Error("Fuzzer remediation returned code that failed syntax validation.");
   }
@@ -195,6 +195,14 @@ export async function remediateFuzzerFinding(finding: FuzzerRemediationFinding):
   const filePath = path.resolve(finding.file);
   const sourceCode = fs.readFileSync(filePath, "utf8");
   const licenseKey = await resolveLicenseKey();
+  const requestBody = {
+    filePath: finding.file,
+    sourceCode,
+    vulnerabilityType: finding.type,
+    breakingPayload: finding.payload,
+    executionTrail: finding.trail
+  };
+
   const response = await fetch(resolveEndpoint(), {
     method: "POST",
     headers: {
@@ -202,13 +210,7 @@ export async function remediateFuzzerFinding(finding: FuzzerRemediationFinding):
       Authorization: `Bearer ${licenseKey}`,
       "X-PreFlight-Pro-Key": licenseKey
     },
-    body: JSON.stringify({
-      filePath,
-      sourceCode,
-      vulnerabilityType: finding.type,
-      breakingPayload: finding.payload,
-      executionTrail: finding.trail
-    })
+    body: JSON.stringify(requestBody)
   });
 
   const rawBody = await response.text();

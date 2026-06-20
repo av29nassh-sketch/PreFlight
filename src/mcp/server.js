@@ -75,6 +75,29 @@ function makePreflightFixSchema(z) {
     : undefined;
 }
 
+async function emitHardBlockNotifications(server, findings = []) {
+  if (typeof server.sendLoggingMessage !== "function") {
+    return;
+  }
+
+  const hardBlocks = findings.filter((finding) => finding?.severity === "critical" || finding?.severity === "HARD_BLOCK");
+  for (const finding of hardBlocks) {
+    await server.sendLoggingMessage({
+      level: "error",
+      logger: "preflight",
+      data: {
+        event: "preflight.hard_block",
+        file: finding.filePath || finding.file,
+        line: finding.line,
+        ruleId: finding.ruleId || finding.type,
+        payload: finding.payload,
+        message: finding.message || finding.issue || "PreFlight hard block detected.",
+        fixAvailable: Boolean(finding.fix)
+      }
+    });
+  }
+}
+
 function registerMcpTools(server, options = {}) {
   const {
     applyScanFixes,
@@ -101,6 +124,7 @@ function registerMcpTools(server, options = {}) {
       const rootDir = path.resolve(cwd, directory || ".");
       const policy = await loadPreflightPolicy(options.rootDir || rootDir || process.cwd());
       const findings = diff ? await scanProjectDiff(rootDir, { policy }) : await scanProject(rootDir, { policy });
+      await emitHardBlockNotifications(server, findings);
       const text = format === "json" ? JSON.stringify(findings, null, 2) : renderReport(findings, { color: false });
 
       return {
@@ -128,6 +152,7 @@ function registerMcpTools(server, options = {}) {
 
       const policy = await loadPreflightPolicy(options.rootDir || rootDir || process.cwd());
       const findings = diff ? await scanProjectDiff(rootDir, { policy }) : await scanProject(rootDir, { policy });
+      await emitHardBlockNotifications(server, findings);
       const fixResult = await applyScanFixes(findings, {
         ask: async () => "y",
         rootDir: options.rootDir || rootDir || process.cwd()

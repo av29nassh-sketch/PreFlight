@@ -847,6 +847,7 @@ module.exports = {
   PRO_ENGINE_CONNECTION_ERROR,
   parseMultiFileRemediationJson,
   parseJavaScript,
+  parseSourceForValidation,
   resolveLlmProvider,
   resolveLlmTimeoutMs,
   renderMultiFilePatchPreview,

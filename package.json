@@ -29,7 +29,9 @@
     "remediationEngine.js",
     "scaffoldEngine.js",
     "taintTracker.js",
+    "docs/**/*.md",
     "src/**/*.js",
+    "src/**/*.ts",
     "wasm/*.wasm",
     "mcp-instructions.md",
     "README.md"
@@ -38,29 +40,41 @@
     "preflight": "cli.js"
   },
   "scripts": {
+    "dev": "tsx src/index.ts",
     "test": "vitest run --globals",
     "demo:reset": "node reset-demo.js",
+    "checks:fast": "tsx src/fast-checks/index.ts",
+    "eye:watch": "tsx src/eye/index.ts",
+    "migrations:scan": "tsx src/migrations/index.ts",
     "scan": "node index.js",
     "build:bin": "pkg . --out-path dist",
     "build:bin:mac": "pkg . --targets node18-macos-x64,node18-macos-arm64 --no-bytecode --public --public-packages \"*\" --out-path dist",
     "build:bin:win": "pkg . --targets node18-win-x64 --out-path dist"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^4.1.2",
+    "chokidar": "^4.0.3",
     "commander": "^12.1.0",
     "dotenv": "^17.4.2",
     "fast-glob": "^3.3.3",
+    "ink": "^3.2.0",
     "openai": "^6.41.0",
     "pgsql-ast-parser": "^12.0.1",
     "picocolors": "^1.1.1",
+    "react": "^18.3.1",
     "tree-sitter-javascript": "^0.25.0",
     "tree-sitter-typescript": "^0.23.2",
+    "tsx": "^4.22.4",
     "web-tree-sitter": "^0.26.9",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/node": "^22.18.0",
+    "@types/react": "^18.3.18",
     "pkg": "^5.8.1",
+    "typescript": "^5.9.3",
     "vitest": "^4.0.15"
   },
   "engines": {

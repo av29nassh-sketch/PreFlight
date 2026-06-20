@@ -4,7 +4,7 @@ import path from "node:path";
 
 const CONFIG_DIR = ".preflight";
 const CONFIG_FILE = "config.json";
-const DEFAULT_AUTH_VALIDATE_ENDPOINT = "https://preflight-vibe.vercel.app/api/v1/remediation";
+const DEFAULT_AUTH_VALIDATE_ENDPOINT = "https://preflight-proxy.vercel.app/api/v1/license/validate";
 
 interface PreFlightAuthConfig {
   licenseKey?: string | null;
@@ -92,14 +92,7 @@ export async function validateLicenseKey(licenseKey: string): Promise<boolean> {
       Authorization: `Bearer ${normalizedKey}`,
       "X-PreFlight-Pro-Key": normalizedKey
     },
-    body: JSON.stringify({
-      validationOnly: true,
-      filePath: "__preflight_auth_check__",
-      sourceCode: "",
-      vulnerabilityType: "LICENSE_VALIDATION",
-      breakingPayload: "",
-      executionTrail: []
-    })
+    body: JSON.stringify({})
   });
 
   return response.ok;

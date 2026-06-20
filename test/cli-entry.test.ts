@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { spawnSync } from "node:child_process";
 
 describe("PreFlight CLI entry", () => {
   let workspaceDir: string;
@@ -24,5 +25,23 @@ describe("PreFlight CLI entry", () => {
     expect(source).toContain("req.query.userId");
     expect(source).toContain('"SELECT * FROM users WHERE id = " + userId');
     expect(source).toContain("db.query(sql)");
+  });
+
+  test("scan --fix preserves the legacy CLI contract", async () => {
+    const targetDir = path.join(workspaceDir, "clean-target");
+    const cliPath = path.resolve(__dirname, "..", "cli.js");
+
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.writeFile(path.join(targetDir, "safe.js"), "const safe = true;\n");
+
+    const result = spawnSync(process.execPath, [cliPath, "scan", ".", "--fix"], {
+      cwd: targetDir,
+      encoding: "utf8",
+      timeout: 30000
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("unknown option '--fix'");
   });
 });

@@ -14,7 +14,7 @@ const BETA_KEY_TTL_DAYS = 14;
 const SUPABASE_BETA_KEYS_TABLE = "preflight_beta_keys";
 const PREFLIGHT_BETA_KEY_PATTERN = /^PREFLIGHT-BETA-\d{8}-[A-Z0-9]+$/i;
 const FUZZER_REMEDIATION_SYSTEM_PROMPT =
-  "You are an expert security engineer. Given a vulnerable code snippet, execution trail, and breaking payload, return ONLY the raw, patched source code. Do not use markdown formatting. Fix the vulnerability by parameterizing the input.";
+  "You are an expert security engineer. Fix the reported vulnerability using the safest framework-appropriate mitigation for the vulnerability type and code context. Do not use markdown, backticks, headings, or explanations. Return only the raw patched source code.";
 
 const app = express();
 app.disable("x-powered-by");
@@ -201,6 +201,35 @@ async function validateOrActivateBetaKey(token, now = new Date()) {
   };
 }
 
+async function validateBetaKeyOnly(token, now = new Date()) {
+  const config = getSupabaseRestConfig();
+  if (!config) {
+    throw new Error("Beta key validation backend is not configured.");
+  }
+
+  const record = await getBetaKeyRecord(config, token);
+  if (!record) {
+    return {
+      allowed: false,
+      status: 401,
+      error: "Unauthorized"
+    };
+  }
+
+  if (record.expires_at && isBetaKeyExpired(record, now)) {
+    return {
+      allowed: false,
+      status: 401,
+      error: "Beta License Expired"
+    };
+  }
+
+  return {
+    allowed: true,
+    record
+  };
+}
+
 async function requirePreflightActivation(req, res, next) {
   const token = extractPreflightActivationToken(req);
   if (!PREFLIGHT_BETA_KEY_PATTERN.test(token)) {
@@ -221,6 +250,27 @@ async function requirePreflightActivation(req, res, next) {
       message: error instanceof Error ? error.message : "Unknown validation error"
     });
     return res.status(500).json({ error: "Deep reasoning engine communication failed." });
+  }
+}
+
+async function handleLicenseValidateRequest(req, res) {
+  const token = extractPreflightActivationToken(req);
+  if (!PREFLIGHT_BETA_KEY_PATTERN.test(token)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const validation = await validateBetaKeyOnly(token);
+    if (!validation.allowed) {
+      return res.status(validation.status || 401).json({ error: validation.error || "Unauthorized" });
+    }
+
+    return res.status(200).json({ valid: true });
+  } catch (error) {
+    console.error("PreFlight proxy license validation failed", {
+      message: error instanceof Error ? error.message : "Unknown validation error"
+    });
+    return res.status(500).json({ error: "License validation failed." });
   }
 }
 
@@ -337,10 +387,12 @@ function buildFuzzerRemediationPrompt({ filePath, sourceCode, vulnerabilityType,
   return [
     "Fix this vulnerability.",
     `File: ${filePath}`,
-    `Type: ${vulnerabilityType}`,
-    `Payload: ${breakingPayload}`,
-    "Trail:",
+    `Vulnerability type: ${vulnerabilityType}`,
+    `Breaking payload: ${breakingPayload}`,
+    "Execution trail:",
     executionTrail.length > 0 ? executionTrail.join("\n") : "No execution trail provided.",
+    "",
+    "Choose the mitigation based on the vulnerability type and surrounding framework code. For example, use parameterized queries for SQL injection, strict path normalization and base-directory allowlists for path traversal, URL protocol/domain allowlists for SSRF, and explicit authorization checks for auth bypasses.",
     "",
     "Code:",
     sourceCode
@@ -416,6 +468,8 @@ function normalizeRemediationRequestBody(body) {
 app.get("/health", (_req, res) => {
   res.status(200).json({ status: "healthy" });
 });
+
+app.post("/api/v1/license/validate", handleLicenseValidateRequest);
 
 async function handleRemediationRequest(req, res) {
   if (!process.env.ANTHROPIC_KEY) {

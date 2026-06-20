@@ -18,7 +18,7 @@ interface DisplayFuzzerFinding {
   globalIndex: number;
 }
 
-type SelectableFinding =
+export type SelectableFinding =
   | {
       kind: "fuzzer";
       finding: ReleaseFuzzerFinding;
@@ -32,6 +32,7 @@ export interface DashboardProps {
   result: ReleaseGateScanResult;
   inputEnabled?: boolean;
   onPatchApplied?: () => Promise<void>;
+  onPatchFinding?: (selected: SelectableFinding) => Promise<void>;
 }
 
 function getStatusColor(status: ReleaseGateStatus): "green" | "yellow" | "red" {
@@ -179,7 +180,7 @@ function FindingGroup({
   );
 }
 
-export function Dashboard({ result, inputEnabled = true, onPatchApplied }: DashboardProps) {
+export function Dashboard({ result, inputEnabled = true, onPatchApplied, onPatchFinding }: DashboardProps) {
   const { exit } = useApp();
   const [patchState, setPatchState] = useState<PatchState>("idle");
   const [patchMessage, setPatchMessage] = useState<string | null>(null);
@@ -253,6 +254,13 @@ export function Dashboard({ result, inputEnabled = true, onPatchApplied }: Dashb
     setPatchMessage(null);
 
     try {
+      if (onPatchFinding) {
+        await onPatchFinding(selected);
+        setPatchState("success");
+        setPatchMessage("Patch command sent to PreFlight daemon.");
+        return;
+      }
+
       if (selected.kind === "fuzzer") {
         const patched = await remediateFuzzerFinding({
           ...selected.finding,

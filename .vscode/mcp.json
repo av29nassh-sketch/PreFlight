@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "preflight-pro": {
+      "command": "preflight.cmd",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}

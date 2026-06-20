@@ -111,4 +111,36 @@ describe("remediateFuzzerFinding", () => {
     ).rejects.toThrow(/syntax validation/i);
     expect(fs.readFileSync(filePath, "utf8")).toBe(originalSource);
   });
+
+  test("accepts valid TypeScript remediation output during syntax validation", async () => {
+    const { remediateFuzzerFinding } = await import("../src/remediation/patcher");
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-ts-remediate-"));
+    const filePath = path.join(rootDir, "route.ts");
+    const patchedCode = [
+      "export async function GET(req: Request): Promise<Response> {",
+      "  return new Response(\"ok\");",
+      "}",
+      ""
+    ].join("\n");
+
+    fs.writeFileSync(filePath, "export async function GET(req) { return new Response(\"bad\"); }\n");
+    process.env.PREFLIGHT_PRO_KEY = "PREFLIGHT-BETA-20260611-TEST";
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ code: patchedCode }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    ) as any;
+
+    await expect(
+      remediateFuzzerFinding({
+        file: filePath,
+        type: "SQL_INJECTION",
+        severity: "HARD_BLOCK",
+        payload: "' OR '1'='1",
+        trail: ["req.query.userId", "db.query(sql)"]
+      })
+    ).resolves.toBe(true);
+    expect(fs.readFileSync(filePath, "utf8")).toBe(patchedCode);
+  });
 });

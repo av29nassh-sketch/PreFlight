@@ -89,16 +89,22 @@ describe("PreFlight local auth config", () => {
     const { createProgram } = await import("../src/cli/index");
     const { readStoredLicenseKey } = await import("../src/config/auth");
 
-    globalThis.fetch = vi.fn(async () =>
-      new Response(JSON.stringify({ ok: true }), {
+    let capturedUrl = "";
+    let capturedBody: any;
+    globalThis.fetch = vi.fn(async (url, init) => {
+      capturedUrl = String(url);
+      capturedBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ valid: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
-      })
-    ) as any;
+      });
+    }) as any;
 
     await createProgram().parseAsync(["node", "preflight", "auth", "PREFLIGHT-BETA-20260611-AUTH"]);
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(capturedUrl).toBe("https://preflight-proxy.vercel.app/api/v1/license/validate");
+    expect(capturedBody).toEqual({});
     await expect(readStoredLicenseKey()).resolves.toBe("PREFLIGHT-BETA-20260611-AUTH");
   });
 });
