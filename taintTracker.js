@@ -9,6 +9,8 @@ const SOURCE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx"];
 
 let parserReady;
 let javascriptLanguage;
+let typescriptLanguage;
+let tsxLanguage;
 
 async function initializeParser() {
   if (!parserReady) {
@@ -29,6 +31,36 @@ async function parseJavaScript(sourceCode) {
   await initializeParser();
   const parser = new Parser();
   parser.setLanguage(javascriptLanguage);
+  return parser.parse(sourceCode);
+}
+
+async function loadLanguageForFile(filePath = "") {
+  await initializeParser();
+  const extension = path.extname(filePath).toLowerCase();
+
+  if (extension === ".tsx") {
+    if (!tsxLanguage) {
+      tsxLanguage = await Language.load(path.join(__dirname, "wasm", "tree-sitter-tsx.wasm"));
+    }
+
+    return tsxLanguage;
+  }
+
+  if (extension === ".ts") {
+    if (!typescriptLanguage) {
+      typescriptLanguage = await Language.load(path.join(__dirname, "wasm", "tree-sitter-typescript.wasm"));
+    }
+
+    return typescriptLanguage;
+  }
+
+  return javascriptLanguage;
+}
+
+async function parseSourceCode(sourceCode, filePath = "") {
+  const language = await loadLanguageForFile(filePath);
+  const parser = new Parser();
+  parser.setLanguage(language);
   return parser.parse(sourceCode);
 }
 
@@ -388,6 +420,7 @@ module.exports = {
   findTaintSources,
   isClientComponent,
   parseJavaScript,
+  parseSourceCode,
   parseModuleBoundaries,
   resolveImportPath
 };

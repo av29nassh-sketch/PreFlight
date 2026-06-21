@@ -21,6 +21,10 @@ const SECRET_PATTERNS: SecretPattern[] = [
   {
     type: "Authorization bearer token",
     pattern: /\bAuthorization\s*:\s*Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi
+  },
+  {
+    type: "Stripe secret key",
+    pattern: /\bsk_(?:live|test)_[A-Za-z0-9_=-]{8,}\b/g
   }
 ];
 

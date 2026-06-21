@@ -12,7 +12,32 @@ const demoDir = path.join(projectRoot, "demo-live-test");
 const configPath = path.join(demoDir, "config.ts");
 const rootPolicyPath = path.join(projectRoot, "preflight.config.json");
 const rootPolicyBackupPath = path.join(projectRoot, ".preflight.config.json.cli-live-test.bak");
+const EMPTY_DOTENV_PATH = path.join(projectRoot, ".preflight-cli-live-empty.env");
+const ISOLATED_HOME = path.join(projectRoot, ".preflight-cli-live-home");
 let movedRootPolicy = false;
+
+function buildIsolatedEnv(overrides = {}) {
+  fs.mkdirSync(ISOLATED_HOME, { recursive: true });
+  const env = {
+    ...process.env,
+    DOTENV_CONFIG_PATH: EMPTY_DOTENV_PATH,
+    HOME: ISOLATED_HOME,
+    USERPROFILE: ISOLATED_HOME,
+    ...overrides
+  };
+
+  if (!Object.prototype.hasOwnProperty.call(overrides, "PREFLIGHT_PRO_KEY")) {
+    delete env.PREFLIGHT_PRO_KEY;
+  }
+  if (!Object.prototype.hasOwnProperty.call(overrides, "PREFLIGHT_PRO_LICENSE_KEY")) {
+    delete env.PREFLIGHT_PRO_LICENSE_KEY;
+  }
+  if (!Object.prototype.hasOwnProperty.call(overrides, "PREFLIGHT_TEAMS_KEY")) {
+    delete env.PREFLIGHT_TEAMS_KEY;
+  }
+
+  return env;
+}
 
 function resetDemoFixture() {
   fs.rmSync(demoDir, { recursive: true, force: true });
@@ -27,10 +52,7 @@ function runCli(command, options = {}) {
       {
         cwd: projectRoot,
         encoding: "utf8",
-        env: {
-          ...process.env,
-          ...(options.env || {})
-        },
+        env: buildIsolatedEnv(options.env),
         windowsHide: true
       },
       (error, stdout, stderr) => {
@@ -61,6 +83,7 @@ describe("PreFlight CLI live E2E", () => {
 
   afterAll(() => {
     fs.rmSync(demoDir, { recursive: true, force: true });
+    fs.rmSync(ISOLATED_HOME, { recursive: true, force: true });
     if (movedRootPolicy) {
       fs.renameSync(rootPolicyBackupPath, rootPolicyPath);
     }
@@ -98,7 +121,7 @@ describe("PreFlight CLI live E2E", () => {
     const result = await runCli("node index.js scan ./demo-live-test --fix", {
       input: "y\n",
       env: {
-        PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260601-TEST"
+        PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260611-TEST"
       }
     });
 

@@ -30,6 +30,29 @@ afterEach(() => {
 });
 
 describe("licenseManager", () => {
+  test("uses PREFLIGHT_HOME as the default config home for isolated installs", async () => {
+    const { readConfig, writeConfig } = require("../src/licensing/licenseManager");
+    const originalPreflightHome = process.env.PREFLIGHT_HOME;
+    const homeDir = makeHome();
+
+    try {
+      process.env.PREFLIGHT_HOME = homeDir;
+      await writeConfig({ freeFixesUsed: 7, licenseKey: null, instanceId: null });
+
+      expect(await readConfig()).toEqual({
+        freeFixesUsed: 7,
+        licenseKey: null,
+        instanceId: null
+      });
+    } finally {
+      if (originalPreflightHome === undefined) {
+        delete process.env.PREFLIGHT_HOME;
+      } else {
+        process.env.PREFLIGHT_HOME = originalPreflightHome;
+      }
+    }
+  });
+
   test("parses GitHub and GitLab remote owners from HTTPS and SSH URLs", () => {
     const { parseRepositoryRemote } = require("../src/licensing/licenseManager");
 

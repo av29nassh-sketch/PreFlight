@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { shouldIgnoreWatchPath } from "../eye/ignoreRules";
+import { scanCodeSafety } from "./code";
 import { scanPackageJson } from "./dependencies";
 import { scanForSecrets } from "./secrets";
 import { type FastCheckFinding, type FastCheckResult, resolveFastCheckStatus } from "./types";
@@ -29,6 +30,10 @@ function isSecretScanTarget(filePath: string): boolean {
   return SECRET_SCAN_EXTENSIONS.includes(extension);
 }
 
+function isCodeScanTarget(filePath: string): boolean {
+  return new Set([".js", ".jsx", ".ts", ".tsx"]).has(path.extname(filePath).toLowerCase());
+}
+
 async function collectCandidateFiles(targetDir: string): Promise<string[]> {
   return fg("**/*", {
     absolute: true,
@@ -39,12 +44,31 @@ async function collectCandidateFiles(targetDir: string): Promise<string[]> {
   });
 }
 
-export async function runFastChecks(targetDir: string): Promise<FastCheckResult> {
+function normalizeCandidateFiles(targetDir: string, candidateFiles?: string[]): string[] | null {
+  if (!candidateFiles || candidateFiles.length === 0) {
+    return null;
+  }
+
+  const isInsideTargetDir = (filePath: string) => {
+    const relativePath = path.relative(targetDir, filePath);
+    return Boolean(relativePath) && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+  };
+
+  return Array.from(
+    new Set(
+      candidateFiles
+        .map((filePath) => (path.isAbsolute(filePath) ? filePath : path.resolve(targetDir, filePath)))
+        .filter((filePath) => isInsideTargetDir(filePath))
+    )
+  );
+}
+
+export async function runFastChecks(targetDir: string, candidateFiles?: string[]): Promise<FastCheckResult> {
   const resolvedTargetDir = path.resolve(targetDir);
-  const candidateFiles = await collectCandidateFiles(resolvedTargetDir);
+  const filesToScan = normalizeCandidateFiles(resolvedTargetDir, candidateFiles) ?? (await collectCandidateFiles(resolvedTargetDir));
   const findings: FastCheckFinding[] = [];
 
-  for (const filePath of candidateFiles) {
+  for (const filePath of filesToScan) {
     if (shouldIgnoreWatchPath(filePath)) {
       continue;
     }
@@ -68,6 +92,9 @@ export async function runFastChecks(targetDir: string): Promise<FastCheckResult>
     try {
       const fileContent = await fs.readFile(filePath, "utf8");
       findings.push(...scanForSecrets(fileContent, filePath));
+      if (isCodeScanTarget(filePath)) {
+        findings.push(...(await scanCodeSafety(fileContent, filePath)));
+      }
     } catch {
       // Ignore unreadable binary or transient files in the fast local pass.
     }

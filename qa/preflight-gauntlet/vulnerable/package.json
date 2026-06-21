@@ -1,0 +1,13 @@
+{
+  "name": "preflight-gauntlet-vulnerable",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "latest",
+    "next": "*",
+    "react": "18.x",
+    "lodash": "^4.17.21"
+  },
+  "devDependencies": {
+    "typescript": "*"
+  }
+}

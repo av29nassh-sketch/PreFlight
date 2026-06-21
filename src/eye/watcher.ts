@@ -85,10 +85,12 @@ export function startWatcher(targetDir: string, options: EyeWatcherOptions = {})
   });
 
   watcher.on("add", (filePath) => {
+    console.log("[Watcher] Detected save event on:", filePath);
     eventQueue.enqueue(path.resolve(filePath));
   });
 
   watcher.on("change", (filePath) => {
+    console.log("[Watcher] Detected save event on:", filePath);
     eventQueue.enqueue(path.resolve(filePath));
   });
 

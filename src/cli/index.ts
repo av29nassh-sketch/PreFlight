@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import "dotenv/config";
 import childProcess from "node:child_process";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,9 +11,11 @@ import { render } from "ink";
 import { startPreFlightDaemon } from "../daemon/engine";
 import { getPreflightSocketPath } from "../daemon/protocol";
 import { startWatcher } from "../eye/watcher";
+import { runInitWizard } from "../commands/init";
 import { saveLicenseKey, validateLicenseKey } from "../config/auth";
 import type { ReleaseGateScanResult } from "../release-gate/model";
 import { runReleaseGateScan } from "../release-gate/pipeline";
+import { applyAutoPatch } from "../release-gate/patcher";
 import { Dashboard } from "../tui/Dashboard";
 import { IpcDashboard } from "../tui/IpcDashboard";
 
@@ -26,6 +29,12 @@ const VULNERABLE_ROUTE = [
   "}",
   ""
 ].join("\n");
+
+function getPackageVersion(): string {
+  const packageJsonPath = path.resolve(__dirname, "..", "..", "package.json");
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: string };
+  return packageJson.version || "0.0.0";
+}
 
 export async function createDemoProject(baseDir = process.cwd()): Promise<string> {
   const demoDir = path.resolve(baseDir, PLAYGROUND_DIR_NAME);
@@ -113,6 +122,59 @@ export async function runLegacyScan(targetDir = process.cwd(), options: { fix?: 
   }
 }
 
+function buildFixCommand(target: string): string {
+  return `preflight fix "${target.replace(/"/g, '\\"')}"`;
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  const command =
+    process.platform === "win32" ? "clip.exe" : process.platform === "darwin" ? "pbcopy" : "xclip";
+  const args = process.platform === "linux" ? ["-selection", "clipboard"] : [];
+  const child = childProcess.spawn(command, args, {
+    stdio: ["pipe", "ignore", "ignore"],
+    windowsHide: true
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(`Clipboard command exited with code ${code}.`));
+    });
+    child.stdin.end(text);
+  });
+}
+
+export async function copyFixCommand(target: string): Promise<string> {
+  const fixCommand = buildFixCommand(target);
+  await copyTextToClipboard(fixCommand);
+  return fixCommand;
+}
+
+export async function handlePreFlightUri(rawUri: string): Promise<void> {
+  const uri = new URL(rawUri);
+  if (uri.protocol !== "preflight:") {
+    throw new Error("Unsupported PreFlight URI protocol.");
+  }
+
+  if (uri.hostname === "copy-fix") {
+    const filePath = uri.searchParams.get("file");
+    if (!filePath) {
+      throw new Error("Missing file parameter in PreFlight copy-fix URI.");
+    }
+
+    const copiedCommand = await copyFixCommand(filePath);
+    process.stdout.write(`Copied fix command: ${copiedCommand}\n`);
+    return;
+  }
+
+  throw new Error(`Unsupported PreFlight URI action: ${uri.hostname}`);
+}
+
 async function waitForChildProcess(child: childProcess.ChildProcess): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     child.once("error", reject);
@@ -147,6 +209,7 @@ export async function runDaemon(targetDir = process.cwd()): Promise<void> {
   });
   process.stderr.write(`PreFlight daemon running for ${handle.targetDir}\n`);
   process.stderr.write(`IPC socket: ${handle.socketPath}\n`);
+  process.stderr.write(`WebSocket alerts: ${handle.websocketUrl}\n`);
 
   let closing = false;
   const close = async () => {
@@ -276,13 +339,98 @@ export async function runDemo(baseDir = process.cwd()): Promise<void> {
   await runScan(demoDir);
 }
 
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isFilePath(filePath: string): Promise<boolean> {
+  try {
+    return (await fs.stat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function formatFuzzerIssue(finding: ReleaseGateScanResult["fuzzFindings"][number]): string {
+  const details = [
+    finding.issue,
+    `Type: ${finding.type}`,
+    `Breaking payload: ${finding.payload}`,
+    ...finding.trail.map((step) => `Trail: ${step}`)
+  ];
+
+  return details.filter(Boolean).join("\n");
+}
+
+async function runReleaseGateFileFix(targetFile: string): Promise<void> {
+  const resolvedFile = path.resolve(targetFile);
+  const targetDir = path.dirname(resolvedFile);
+
+  const result = await runReleaseGateScan({
+    targetDir,
+    eyeActive: false,
+    changedFiles: [resolvedFile]
+  });
+
+  const issueMap = new Map<string, string[]>();
+  const addIssue = (filePath: string, issue: string) => {
+    const resolvedIssueFile = path.resolve(targetDir, filePath);
+    const issues = issueMap.get(resolvedIssueFile) || [];
+    issues.push(issue);
+    issueMap.set(resolvedIssueFile, issues);
+  };
+
+  for (const finding of result.findings) {
+    addIssue(finding.file, finding.issue);
+  }
+
+  for (const finding of result.fuzzFindings) {
+    addIssue(finding.file, formatFuzzerIssue(finding));
+  }
+
+  const fileIssues = issueMap.get(resolvedFile) || [];
+  if (fileIssues.length === 0) {
+    process.stdout.write(`No PreFlight release-gate issues found in ${resolvedFile}\n`);
+    return;
+  }
+
+  process.stdout.write(`PreFlight found ${fileIssues.length} issue(s) in ${resolvedFile}\n`);
+  for (const issue of fileIssues) {
+    const firstLine = issue.split(/\r?\n/).find((line) => line.trim()) || issue;
+    process.stdout.write(`- ${firstLine}\n`);
+  }
+
+  await applyAutoPatch(resolvedFile, fileIssues);
+  process.stdout.write(`PreFlight fix applied to ${resolvedFile}\n`);
+}
+
+export async function runFix(target = process.cwd()): Promise<void> {
+  const resolvedTarget = path.resolve(target);
+
+  if (!(await pathExists(resolvedTarget))) {
+    throw new Error(`Fix target does not exist: ${resolvedTarget}`);
+  }
+
+  if (await isFilePath(resolvedTarget)) {
+    await runReleaseGateFileFix(resolvedTarget);
+    return;
+  }
+
+  await runLegacyScan(resolvedTarget, { fix: true });
+}
+
 export function createProgram(): Command {
   const program = new Command();
 
   program
     .name("preflight")
     .description("Local-first security gate for AI-generated code.")
-    .version("0.2.5");
+    .version(getPackageVersion());
 
   program
     .command("scan")
@@ -296,6 +444,38 @@ export function createProgram(): Command {
       }
 
       await runScan(dir);
+    });
+
+  program
+    .command("init")
+    .description("Configure PreFlight MCP for your AI assistant or IDE.")
+    .action(async () => {
+      await runInitWizard();
+    });
+
+  program
+    .command("fix")
+    .argument("[target]", "File or directory to remediate", process.cwd())
+    .description("Remediate a file through the release-gate pipeline, or a directory through scan --fix.")
+    .action(async (target: string) => {
+      await runFix(target);
+    });
+
+  program
+    .command("copy-fix")
+    .argument("<target>", "File or directory whose fix command should be copied")
+    .description("Copy the matching preflight fix command to the system clipboard.")
+    .action(async (target: string) => {
+      const copiedCommand = await copyFixCommand(target);
+      process.stdout.write(`Copied fix command: ${copiedCommand}\n`);
+    });
+
+  program
+    .command("handle-uri")
+    .argument("<uri>", "PreFlight protocol URI")
+    .description("Handle internal preflight:// protocol activation.")
+    .action(async (uri: string) => {
+      await handlePreFlightUri(uri);
     });
 
   program

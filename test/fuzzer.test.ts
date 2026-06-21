@@ -106,4 +106,30 @@ export async function GET(req) {
     expect(result?.vulnerabilityType).toBe("PATH_TRAVERSAL");
     expect(result?.payload).toContain("..");
   });
+
+  test("does not flag validated execFile argument arrays as shell command injection", async () => {
+    const { PreFlightCPG } = await import("../src/cpg/index");
+    const { PreFlightFuzzer } = await import("../src/fuzzer/PreFlightFuzzer");
+    const filePath = "app/api/payment.js";
+    const source = `
+const { execFile } = require("child_process");
+
+export function POST(req) {
+  const paymentProviderHost = req.body.host;
+  const hostPattern = /^[a-zA-Z0-9.-]+$/;
+  if (!hostPattern.test(paymentProviderHost)) {
+    throw new Error("Invalid host");
+  }
+  return execFile("ping", ["-c", "4", paymentProviderHost]);
+}
+`;
+    const tree = await parseJavaScript(source);
+    const cpg = new PreFlightCPG({
+      astByFile: { [filePath]: tree },
+      sourceByFile: { [filePath]: source }
+    });
+    const fuzzer = new PreFlightFuzzer(cpg);
+
+    expect(fuzzer.fuzzAll()).toEqual([]);
+  });
 });

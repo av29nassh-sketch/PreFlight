@@ -7,7 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
 const { promisify } = require("node:util");
-require("dotenv").config({ quiet: true });
+require("dotenv").config({ path: process.env.DOTENV_CONFIG_PATH || undefined, quiet: true });
 const { Command } = require("commander");
 const fg = require("fast-glob");
 const { parse: parseSql } = require("pgsql-ast-parser");
@@ -283,6 +283,101 @@ const SARIF_RULES = {
       tags: ["security", "sql-injection"]
     }
   },
+  "command-injection": {
+    id: "command-injection",
+    name: "Unsafe command execution",
+    shortDescription: {
+      text: "User-controlled input reaches shell command execution."
+    },
+    fullDescription: {
+      text: "Building shell commands from request input can allow command injection. Use argument arrays and strict validation."
+    },
+    helpUri: "https://preflight.local/rules/command-injection",
+    defaultConfiguration: {
+      level: "error"
+    },
+    properties: {
+      precision: "high",
+      securitySeverity: "9.8",
+      tags: ["security", "command-injection"]
+    }
+  },
+  ssrf: {
+    id: "ssrf",
+    name: "Server-side request forgery",
+    shortDescription: {
+      text: "User-controlled URLs reach outbound server-side fetches."
+    },
+    fullDescription: {
+      text: "Server-side fetches must enforce protocol, host allowlists, private-IP blocking, and redirect safety."
+    },
+    helpUri: "https://preflight.local/rules/ssrf",
+    defaultConfiguration: {
+      level: "error"
+    },
+    properties: {
+      precision: "high",
+      securitySeverity: "8.8",
+      tags: ["security", "ssrf"]
+    }
+  },
+  "path-traversal": {
+    id: "path-traversal",
+    name: "Unsafe filesystem path access",
+    shortDescription: {
+      text: "User-controlled input reaches filesystem paths."
+    },
+    fullDescription: {
+      text: "Filesystem paths derived from request input must be normalized, bounded to an allowed root, and validated."
+    },
+    helpUri: "https://preflight.local/rules/path-traversal",
+    defaultConfiguration: {
+      level: "error"
+    },
+    properties: {
+      precision: "high",
+      securitySeverity: "8.6",
+      tags: ["security", "path-traversal"]
+    }
+  },
+  "auth-bypass": {
+    id: "auth-bypass",
+    name: "Missing authorization guard",
+    shortDescription: {
+      text: "Account-scoped mutation uses request-controlled identifiers without an authorization guard."
+    },
+    fullDescription: {
+      text: "Routes that mutate account, billing, tenant, organization, or user records must verify the caller is authorized for the target resource."
+    },
+    helpUri: "https://preflight.local/rules/auth-bypass",
+    defaultConfiguration: {
+      level: "error"
+    },
+    properties: {
+      precision: "medium",
+      securitySeverity: "8.9",
+      tags: ["security", "authorization", "bola"]
+    }
+  },
+  "dependency-unpinned": {
+    id: "dependency-unpinned",
+    name: "Unpinned dependency version",
+    shortDescription: {
+      text: "Dependency version is wildcarded, latest, or an unsafe range."
+    },
+    fullDescription: {
+      text: "Unpinned dependencies increase supply-chain risk and can make builds non-reproducible."
+    },
+    helpUri: "https://preflight.local/rules/dependency-unpinned",
+    defaultConfiguration: {
+      level: "warning"
+    },
+    properties: {
+      precision: "high",
+      securitySeverity: "6.8",
+      tags: ["security", "supply-chain"]
+    }
+  },
   "architectural-leak": {
     id: "architectural-leak",
     name: "Server-only code in client component",
@@ -513,8 +608,12 @@ function isAppApiRoute(relativePath) {
   return toPosix(relativePath).startsWith("app/api/");
 }
 
+function isGenericApiRoute(relativePath) {
+  return /(?:^|\/)api\//.test(toPosix(relativePath));
+}
+
 function isBackendApiRoute(relativePath) {
-  return isAppApiRoute(relativePath) || isPagesApiRoute(relativePath);
+  return isAppApiRoute(relativePath) || isPagesApiRoute(relativePath) || isGenericApiRoute(relativePath);
 }
 
 function hasUseServerDirective(sourceCode) {
@@ -1103,6 +1202,36 @@ function getCredentialFix(sourceCode, node, credential) {
   };
 }
 
+function findCredentialStringNode(sourceCode, node) {
+  let matchedNode = null;
+
+  walkTree(node, (candidate) => {
+    if (matchedNode || candidate.type !== "string") {
+      return;
+    }
+
+    const innerString = unquoteTreeString(textFromNode(sourceCode, candidate));
+    if (detectCredential(innerString)) {
+      matchedNode = candidate;
+    }
+  });
+
+  return matchedNode;
+}
+
+function getCredentialFixForStaticValue(sourceCode, node, credential) {
+  if (!credential) {
+    return undefined;
+  }
+
+  if (node.type === "string" || (node.type === "template_string" && !textFromNode(sourceCode, node).includes("${"))) {
+    return getCredentialFix(sourceCode, node, credential);
+  }
+
+  const credentialStringNode = findCredentialStringNode(sourceCode, node);
+  return credentialStringNode ? getCredentialFix(sourceCode, credentialStringNode, credential) : undefined;
+}
+
 function normalizeEnvVarToken(name) {
   return String(name || "")
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
@@ -1566,7 +1695,7 @@ function credentialFindingForStaticValue({ filePath, relativePath, sourceCode, n
     line: lineFromStringIndex(sourceCode, node.startIndex),
     message: frontendSecretMessage(requireClientComponent),
     evidence: secretEvidence,
-    fix: credential ? getCredentialFix(sourceCode, node, credential) : undefined
+    fix: getCredentialFixForStaticValue(sourceCode, node, credential)
   });
 }
 
@@ -1787,6 +1916,7 @@ const USER_CONTROLLED_URL_PATTERNS = [
   /\b(?:req|request)\.body\b/i,
   /\b(?:req|request)\.params\b/i,
   /\b(?:req|request)\.url\b/i,
+  /\b(?:req|request)\.headers\s*\.\s*get\s*\(/i,
   /\bnextUrl\.searchParams\b/i,
   /\bsearchParams\.get\s*\(/i,
   /\b(?:req|request)\.json\s*\(/i,
@@ -1892,9 +2022,22 @@ function isTrustedSafeUrlValidatorCallee(calleeText, trustedValidators) {
   );
 }
 
+function isTrustedInlineUrlValidationCallText(callText) {
+  const text = String(callText || "");
+  const hasValidationMethod = /\.(?:test|has|includes)\s*\(/.test(text);
+  if (!hasValidationMethod) {
+    return false;
+  }
+
+  return /allowlist|whitelist|trusted|allowed|validDomains|validHosts|allowedHosts|allowedOrigins|allowedDomains|hostPattern|domainRegex|hostname|protocol|new\s+URL\s*\(|\.hostname|\.protocol|\.match\s*\(/i.test(text);
+}
+
 function isTrustedSafeUrlValidatorCallText(callText, trustedValidators) {
   const match = /^\s*([A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)?)\s*\(/.exec(String(callText || ""));
-  return Boolean(match && isTrustedSafeUrlValidatorCallee(match[1], trustedValidators));
+  return Boolean(
+    (match && isTrustedSafeUrlValidatorCallee(match[1], trustedValidators)) ||
+    isTrustedInlineUrlValidationCallText(callText)
+  );
 }
 
 function collectImportedCallTargets(tree, sourceCode) {
@@ -1956,7 +2099,10 @@ function isKnownImmutableTaintApi(calleeText) {
 }
 
 function isKnownNonMutatingFrameworkCallee(calleeText) {
-  return /^(?:Response\.json|NextResponse\.json|res\.json)$/.test(String(calleeText || "").replace(/\s+/g, ""));
+  const compact = String(calleeText || "").replace(/\s+/g, "");
+  return /^(?:Response\.json|NextResponse\.json|res\.(?:json|send|status)|router\.(?:get|post|put|patch|delete|use)|app\.(?:get|post|put|patch|delete|use)|db\.[A-Za-z_$][\w$]*|client\.query|execFile|execFileSync|execFileAsync|requireAuth|fs\.(?:readFile|readFileSync|createReadStream)|path\.(?:join|normalize|resolve|basename)|[A-Za-z_$][\w$]*\.searchParams\.get)$/.test(compact) ||
+    /\.has$/.test(compact) ||
+    /\.test$/.test(compact);
 }
 
 function collectPatternIdentifiers(node, sourceCode, identifiers = []) {
@@ -2105,7 +2251,7 @@ function collectSsrfDataflow(tree, sourceCode, trustedValidators, importedCallTa
         if (
           !isKnownImmutableTaintApi(calleeText) &&
           !isOutboundHttpPrimitive(calleeText) &&
-          !isTrustedSafeUrlValidatorCallee(calleeText, trustedValidators) &&
+          !isTrustedSafeUrlValidatorCallText(callText, trustedValidators) &&
           argsNode
         ) {
           const taintedArguments = [];
@@ -2117,6 +2263,10 @@ function collectSsrfDataflow(tree, sourceCode, trustedValidators, importedCallTa
           }
 
           if (taintedArguments.length > 0) {
+            if (isKnownNonMutatingFrameworkCallee(calleeText)) {
+              return;
+            }
+
             if (isImportedCallee(calleeText, importedCallTargets)) {
               addHardStop({
                 node,
@@ -2126,18 +2276,16 @@ function collectSsrfDataflow(tree, sourceCode, trustedValidators, importedCallTa
               return;
             }
 
-            if (!isKnownNonMutatingFrameworkCallee(calleeText)) {
-              addHardStop({
-                node,
-                reason: "complex-aliasing",
-                evidence: `tainted object passed into unknown function ${calleeText}`
-              });
-              return;
-            }
+            addHardStop({
+              node,
+              reason: "complex-aliasing",
+              evidence: `tainted object passed into unknown function ${calleeText}`
+            });
+            return;
           }
         }
 
-        if (!isTrustedSafeUrlValidatorCallee(calleeText, trustedValidators)) {
+        if (!isTrustedSafeUrlValidatorCallText(callText, trustedValidators)) {
           return;
         }
 
@@ -2190,6 +2338,25 @@ function isValidatedUrlExpression(argumentText, validatedVariables = new Set(), 
   );
 }
 
+function hasWeakUrlValidationForArgument(sourceCode, argumentText, trustedValidators) {
+  const text = String(argumentText || "").trim();
+  const identifierMatch = /^([A-Za-z_$][\w$]*)$/.exec(text);
+  if (!identifierMatch) {
+    return false;
+  }
+
+  const identifier = identifierMatch[1];
+  const validationPattern = new RegExp(`[^;\\n]*(?:\\.test|\\.has|\\.includes)\\s*\\(\\s*${escapeRegexLiteral(identifier)}\\b[^;\\n]*`, "g");
+  let match;
+  while ((match = validationPattern.exec(sourceCode)) !== null) {
+    if (!isTrustedSafeUrlValidatorCallText(match[0], trustedValidators)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function ambiguousAstFinding({ filePath, sourceCode, hardStop }) {
   return finding({
     ruleId: "ambiguous-ast",
@@ -2240,6 +2407,7 @@ function scanSsrfFindings({ filePath, relativePath, sourceCode, tree }) {
     }
 
     const argumentText = textFromNode(sourceCode, argumentNode);
+    const hasWeakValidation = hasWeakUrlValidationForArgument(sourceCode, argumentText, trustedValidators);
     if (
       isStaticUrlExpression(argumentText) ||
       isValidatedUrlExpression(argumentText, validatedVariables, trustedValidators) ||
@@ -2253,7 +2421,9 @@ function scanSsrfFindings({ filePath, relativePath, sourceCode, tree }) {
       severity: "high",
       filePath,
       line: lineFromStringIndex(sourceCode, node.startIndex),
-      message: "Outbound HTTP request uses a user-controlled URL without private-IP and redirect validation.",
+      message: hasWeakValidation
+        ? "Outbound HTTP request uses a user-controlled URL after weak validation that does not enforce a strict allowlist."
+        : "Outbound HTTP request uses a user-controlled URL without private-IP and redirect validation.",
       evidence: textFromNode(sourceCode, node).replace(/\s+/g, " ").trim(),
       deployedConsequence: "If you deploy this, attackers can pivot server-side requests into internal metadata services or private network targets.",
       actionRequired: "Route the URL through an allowlist/private-IP/redirect validator, then test localhost, 169.254.169.254, and redirect-chain inputs.",
@@ -2527,6 +2697,257 @@ function scanSqlConcatenationFindings({ filePath, sourceCode, tree }) {
   );
 }
 
+function collectRequestControlledVariables(sourceCode) {
+  const taintedVariables = new Set();
+  const taintedObjects = new Set();
+  const directPatterns = [
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:req|request)\s*\.\s*(?:query|body|params|headers)\s*(?:\.\s*[A-Za-z_$][\w$]*|\[\s*["'][^"']+["']\s*\])?/g,
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:req|request)\s*\.\s*nextUrl\s*\.\s*searchParams\s*\.\s*get\s*\(/g,
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\s*\.\s*searchParams\s*\.\s*get\s*\(/g,
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*new\s+URL\s*\(\s*(?:req|request)\s*\.\s*url\s*\)/g
+  ];
+
+  for (const pattern of directPatterns) {
+    let match;
+    while ((match = pattern.exec(sourceCode)) !== null) {
+      taintedVariables.add(match[1]);
+    }
+  }
+
+  const jsonObjectPattern = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+(?:req|request)\s*\.\s*json\s*\(\s*\)/g;
+  let match;
+  while ((match = jsonObjectPattern.exec(sourceCode)) !== null) {
+    taintedObjects.add(match[1]);
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const propertyPattern = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)/g;
+    propertyPattern.lastIndex = 0;
+    while ((match = propertyPattern.exec(sourceCode)) !== null) {
+      if ((taintedObjects.has(match[2]) || taintedVariables.has(match[2])) && !taintedVariables.has(match[1])) {
+        taintedVariables.add(match[1]);
+        changed = true;
+      }
+    }
+
+    const aliasPattern = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\b/g;
+    aliasPattern.lastIndex = 0;
+    while ((match = aliasPattern.exec(sourceCode)) !== null) {
+      if (taintedVariables.has(match[2]) && !taintedVariables.has(match[1])) {
+        taintedVariables.add(match[1]);
+        changed = true;
+      }
+    }
+
+    const callAssignmentPattern = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)?\s*\(([^)]*)\)/g;
+    callAssignmentPattern.lastIndex = 0;
+    while ((match = callAssignmentPattern.exec(sourceCode)) !== null) {
+      const usesTaintedArgument = [...taintedVariables].some((name) =>
+        new RegExp(`\\b${escapeRegexLiteral(name)}\\b`).test(match[2])
+      );
+      if (usesTaintedArgument && !taintedVariables.has(match[1])) {
+        taintedVariables.add(match[1]);
+        changed = true;
+      }
+    }
+
+    const pathJoinAssignmentPattern = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*path\s*\.\s*join\s*\(([\s\S]*?)\)\s*;/g;
+    pathJoinAssignmentPattern.lastIndex = 0;
+    while ((match = pathJoinAssignmentPattern.exec(sourceCode)) !== null) {
+      const usesTaintedArgument = [...taintedVariables].some((name) =>
+        new RegExp(`\\b${escapeRegexLiteral(name)}\\b`).test(match[2])
+      );
+      if (usesTaintedArgument && !taintedVariables.has(match[1])) {
+        taintedVariables.add(match[1]);
+        changed = true;
+      }
+    }
+  }
+
+  return taintedVariables;
+}
+
+function scanCommandInjectionFindings({ filePath, sourceCode }) {
+  const findings = [];
+  const taintedVariables = collectRequestControlledVariables(sourceCode);
+  const commandVariables = new Set();
+  const staticCommandVariables = new Set();
+  const staticCommandPattern = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|`([^`]*)`)/g;
+  let staticMatch;
+  while ((staticMatch = staticCommandPattern.exec(sourceCode)) !== null) {
+    const literal = staticMatch[2] || staticMatch[3] || staticMatch[4] || "";
+    if (/\b(?:ping|curl|wget|ssh|scp|tar|zip|unzip|rm|cat|ls|cmd|powershell|nslookup)\b/i.test(literal)) {
+      staticCommandVariables.add(staticMatch[1]);
+    }
+  }
+
+  const commandBuildPattern =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;\n]*\+[^;\n]*)/g;
+  let match;
+
+  while ((match = commandBuildPattern.exec(sourceCode)) !== null) {
+    const expression = match[2];
+    const usesTaintedVariable =
+      /\b(?:req|request)\s*\.\s*(?:query|body|params|headers)\b/.test(expression) ||
+      [...taintedVariables].some((name) =>
+        new RegExp(`\\b${escapeRegexLiteral(name)}\\b`).test(expression)
+      );
+    const usesCommandLiteral = /\b(?:ping|curl|wget|ssh|scp|tar|zip|unzip|rm|cat|ls|cmd|powershell|nslookup)\b/i.test(expression);
+    const usesStaticCommandVariable = [...staticCommandVariables].some((name) =>
+      new RegExp(`\\b${escapeRegexLiteral(name)}\\b`).test(expression)
+    );
+    if (usesTaintedVariable && (usesCommandLiteral || usesStaticCommandVariable)) {
+      commandVariables.add(match[1]);
+    }
+  }
+
+  const execPattern = /\b(exec|execSync)\s*\(\s*([^,\n)]+)/g;
+  while ((match = execPattern.exec(sourceCode)) !== null) {
+    const argumentText = match[2];
+    const directTaintedVariable = /^[A-Za-z_$][\w$]*$/.test(argumentText) && commandVariables.has(argumentText);
+    const inlineTaintedVariable =
+      /\b(?:req|request)\s*\.\s*(?:query|body|params|headers)\b/.test(argumentText) ||
+      [...taintedVariables].some((name) => new RegExp(`\\b${escapeRegexLiteral(name)}\\b`).test(argumentText));
+
+    if (!directTaintedVariable && !inlineTaintedVariable) {
+      continue;
+    }
+
+    findings.push(finding({
+      ruleId: "command-injection",
+      severity: "critical",
+      filePath,
+      line: lineFromStringIndex(sourceCode, match.index),
+      message: "User-controlled input reaches shell command execution without argument isolation or validation.",
+      evidence: match[0].replace(/\s+/g, " ").trim(),
+      requiresDeepRemediation: true
+    }));
+  }
+
+  return findings;
+}
+
+function scanPathTraversalFindings({ filePath, sourceCode }) {
+  const findings = [];
+  const taintedVariables = collectRequestControlledVariables(sourceCode);
+  const fileReadPattern = /\b(?:fs\s*\.\s*)?(readFile|readFileSync|createReadStream)\s*\(\s*([^,\n)]+)/g;
+  let match;
+
+  while ((match = fileReadPattern.exec(sourceCode)) !== null) {
+    const argumentText = match[2];
+    const usesTaintedInput = [...taintedVariables].some((name) => new RegExp(`\\b${escapeRegexLiteral(name)}\\b`).test(argumentText));
+    const hasBoundaryCheck = /\b(?:normalize|resolve)\s*\(|\.startsWith\s*\(|\b(?:safePath|allowedRoot|baseDir)\b/i.test(sourceCode);
+    if (!usesTaintedInput || hasBoundaryCheck) {
+      continue;
+    }
+
+    findings.push(finding({
+      ruleId: "path-traversal",
+      severity: "critical",
+      filePath,
+      line: lineFromStringIndex(sourceCode, match.index),
+      message: "User-controlled input reaches filesystem access without path normalization and root-boundary validation.",
+      evidence: match[0].replace(/\s+/g, " ").trim(),
+      requiresDeepRemediation: true
+    }));
+  }
+
+  return findings;
+}
+
+function findMatchingClosingBrace(sourceCode, openIndex) {
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+
+  for (let index = openIndex; index < sourceCode.length; index += 1) {
+    const char = sourceCode[index];
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === "\"" || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function getEnclosingBlockText(sourceCode, index) {
+  for (let cursor = index; cursor >= 0; cursor -= 1) {
+    if (sourceCode[cursor] !== "{") {
+      continue;
+    }
+
+    const closeIndex = findMatchingClosingBrace(sourceCode, cursor);
+    if (closeIndex >= index) {
+      return sourceCode.slice(cursor, closeIndex + 1);
+    }
+  }
+
+  return sourceCode;
+}
+
+function scanAuthorizationBypassFindings({ filePath, sourceCode }) {
+  const accountMutationPattern = /\b[A-Za-z_$][\w$]*\s*\.\s*(?:updateBillingPlan|updateProfile|updateAccount|deleteAccount|transferOwnership)\s*\(/gi;
+  const sqlAccountMutationPattern = /\b(?:db|client|pool)\s*\.\s*(?:query|execute)\s*\(\s*(?:"[^"]*\bUPDATE\s+(?:billing|accounts?|organizations?|users?)\b[^"]*\bWHERE\b[^"]*\b(?:account_id|organization_id|tenant_id|user_id|id)\b[^"]*"|'[^']*\bUPDATE\s+(?:billing|accounts?|organizations?|users?)\b[^']*\bWHERE\b[^']*\b(?:account_id|organization_id|tenant_id|user_id|id)\b[^']*'|`[^`]*\bUPDATE\s+(?:billing|accounts?|organizations?|users?)\b[^`]*\bWHERE\b[^`]*\b(?:account_id|organization_id|tenant_id|user_id|id)\b[^`]*`)/gi;
+  const userControlledIdentifierPattern = /\b(?:accountId|organizationId|tenantId|targetUserId|userId)\b/;
+  const authGuardPattern = /\b(?:getSession|verifyToken|requireAuth|authorize|requireRole|requirePermission|checkPermission|verifySession|validateSession|isAdmin|hasRole)\s*\(|\breq\.(?:user|session)\b|\bif\s*\(\s*!\s*(?:user|session|auth|req\.user|req\.session)\s*\)/i;
+  const findings = [];
+
+  const maybeAddFinding = (match) => {
+    const routeBody = getEnclosingBlockText(sourceCode, match.index);
+    if (
+      !userControlledIdentifierPattern.test(routeBody) ||
+      authGuardPattern.test(routeBody)
+    ) {
+      return;
+    }
+
+    findings.push(finding({
+      ruleId: "auth-bypass",
+      severity: "critical",
+      filePath,
+      line: lineFromStringIndex(sourceCode, match.index),
+      message: "Account-scoped mutation uses request-controlled identifiers without an obvious authorization guard.",
+      evidence: match[0].replace(/\s+/g, " ").trim(),
+      requiresDeepRemediation: true
+    }));
+  };
+
+  let match;
+  while ((match = accountMutationPattern.exec(sourceCode)) !== null) {
+    maybeAddFinding(match);
+  }
+
+  while ((match = sqlAccountMutationPattern.exec(sourceCode)) !== null) {
+    maybeAddFinding(match);
+  }
+
+  return dedupeFindings(findings);
+}
+
 function scanArchitecturalLeakFindings({ filePath, sourceCode, tree }) {
   return findServerSideLeaks(tree.rootNode, sourceCode).map((leak) =>
     finding({
@@ -2566,6 +2987,9 @@ function scanParsedSourceFile({ filePath, relativePath, sourceCode, tree, policy
     }),
     ...scanSsrfFindings({ filePath, relativePath, sourceCode, tree }),
     ...scanSqlConcatenationFindings({ filePath, sourceCode, tree }),
+    ...scanCommandInjectionFindings({ filePath, sourceCode }),
+    ...scanPathTraversalFindings({ filePath, sourceCode }),
+    ...scanAuthorizationBypassFindings({ filePath, sourceCode }),
     ...scanArchitecturalLeakFindings({ filePath, sourceCode, tree }),
     ...scanCustomTeamRules({ filePath, relativePath, sourceCode, tree, policy })
   ];
@@ -2598,6 +3022,51 @@ function dedupeFindings(findings) {
     }
 
     seen.add(key);
+    return true;
+  });
+}
+
+const PRECISE_LOCAL_RULE_IDS = new Set([
+  "auth-bypass",
+  "command-injection",
+  "path-traversal",
+  "sql-injection",
+  "ssrf"
+]);
+
+function suppressRedundantAmbiguousFindings(findings) {
+  const preciseLocations = new Set();
+  const preciseRulesByFile = new Map();
+
+  for (const item of findings) {
+    if (!PRECISE_LOCAL_RULE_IDS.has(item.ruleId)) {
+      continue;
+    }
+
+    preciseLocations.add(`${path.resolve(item.filePath)}:${item.line}`);
+    const fileKey = path.resolve(item.filePath);
+    if (!preciseRulesByFile.has(fileKey)) {
+      preciseRulesByFile.set(fileKey, new Set());
+    }
+    preciseRulesByFile.get(fileKey).add(item.ruleId);
+  }
+
+  return findings.filter((item) => {
+    if (item.ruleId !== "ambiguous-ast") {
+      return true;
+    }
+
+    const fileKey = path.resolve(item.filePath);
+    if (preciseLocations.has(`${fileKey}:${item.line}`)) {
+      return false;
+    }
+
+    const preciseRules = preciseRulesByFile.get(fileKey);
+    const evidence = String(item.evidence || "");
+    if (preciseRules?.has("path-traversal") && /\bpath\s*\.\s*join\b/.test(evidence)) {
+      return false;
+    }
+
     return true;
   });
 }
@@ -2984,7 +3453,7 @@ function scanSqlSource({ filePath, source }) {
 
 async function scanSupabaseMigrations(rootDir, options = {}) {
   const policy = options.policy || normalizePolicy();
-  const files = await fg(["supabase/migrations/**/*.sql"], {
+  const files = await fg(["**/supabase/migrations/**/*.sql"], {
     cwd: rootDir,
     absolute: false,
     dot: false,
@@ -3036,6 +3505,90 @@ async function scanSupabaseMigrations(rootDir, options = {}) {
     );
 
   return applyPolicy(dedupeFindings([...missingRlsFindings, ...tautologyFindings]), policy, rootDir);
+}
+
+function classifyDependencyVersion(version) {
+  const normalizedVersion = String(version || "").trim().toLowerCase();
+
+  if (normalizedVersion === "*" || normalizedVersion === "latest") {
+    return {
+      severity: "critical",
+      issue: `uses '${version}', which is completely unpinned.`
+    };
+  }
+
+  if (/(^|[.\-])x($|[.\-])/.test(normalizedVersion) || normalizedVersion.includes("*")) {
+    return {
+      severity: "critical",
+      issue: `uses wildcard version '${version}'.`
+    };
+  }
+
+  if (/^[\^~><=]/.test(normalizedVersion) || /\s+-\s+/.test(normalizedVersion) || /\|\|/.test(normalizedVersion)) {
+    return {
+      severity: "warning",
+      issue: `uses unpinned range '${version}'.`
+    };
+  }
+
+  return null;
+}
+
+function dependencyBlock(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return Object.fromEntries(Object.entries(value).filter((entry) => typeof entry[1] === "string"));
+}
+
+async function scanDependencyPins(rootDir, options = {}) {
+  const policy = options.policy || normalizePolicy();
+  const files = await fg(["**/package.json"], {
+    cwd: rootDir,
+    absolute: false,
+    dot: false,
+    ignore: DEFAULT_SOURCE_GLOB_IGNORES
+  });
+  const findings = [];
+
+  for (const relativePath of files) {
+    if (isIgnoredPath(relativePath, policy)) {
+      continue;
+    }
+
+    const filePath = path.join(rootDir, relativePath);
+    let source;
+    let parsed;
+    try {
+      source = await fs.readFile(filePath, "utf8");
+      parsed = JSON.parse(source.replace(/^\uFEFF/, ""));
+    } catch {
+      continue;
+    }
+
+    for (const blockName of ["dependencies", "devDependencies"]) {
+      const dependencies = dependencyBlock(parsed[blockName]);
+      for (const [packageName, version] of Object.entries(dependencies)) {
+        const classification = classifyDependencyVersion(version);
+        if (!classification) {
+          continue;
+        }
+
+        const packageOffset = source.indexOf(`"${packageName}"`);
+        findings.push(finding({
+          ruleId: "dependency-unpinned",
+          severity: classification.severity,
+          filePath,
+          line: packageOffset >= 0 ? lineAtOffset(source, packageOffset) : 1,
+          message: `${blockName}.${packageName} ${classification.issue}`,
+          evidence: `"${packageName}": "${version}"`
+        }));
+      }
+    }
+  }
+
+  return applyPolicy(dedupeFindings(findings), policy, rootDir);
 }
 
 async function fileExists(filePath) {
@@ -3137,7 +3690,7 @@ async function scanFiles(rootDir, files, options = {}) {
   }
 
   findings.push(...taintViolationsToFindings(analyzeTaintGraph(projectGraph), parsedFiles));
-  const filteredFindings = applyPolicy(dedupeFindings(findings), policy, resolvedRoot);
+  const filteredFindings = suppressRedundantAmbiguousFindings(applyPolicy(dedupeFindings(findings), policy, resolvedRoot));
   const suppressionResult = suppressIgnoredFindings(filteredFindings, sourceByFile);
   const sortedFindings = suppressionResult.findings.sort((a, b) => {
     if (a.filePath === b.filePath) {
@@ -3162,12 +3715,13 @@ async function scanProjectDiff(rootDir = process.cwd(), options = {}) {
 async function scanProject(rootDir = process.cwd(), options = {}) {
   const resolvedRoot = path.resolve(rootDir);
   const policy = options.policy || normalizePolicy();
-  const [sourceFiles, migrationFindings] = await Promise.all([
+  const [sourceFiles, migrationFindings, dependencyFindings] = await Promise.all([
     collectSourceFiles(resolvedRoot, { policy }),
-    scanSupabaseMigrations(resolvedRoot, { policy })
+    scanSupabaseMigrations(resolvedRoot, { policy }),
+    scanDependencyPins(resolvedRoot, { policy })
   ]);
   const sourceFindings = await scanFiles(resolvedRoot, sourceFiles, { policy, warn: options.warn });
-  const finalFindings = applyPolicy([...sourceFindings, ...migrationFindings], policy, resolvedRoot).sort((a, b) => {
+  const finalFindings = suppressRedundantAmbiguousFindings(applyPolicy([...sourceFindings, ...migrationFindings, ...dependencyFindings], policy, resolvedRoot)).sort((a, b) => {
     if (a.filePath === b.filePath) {
       return a.line - b.line;
     }
@@ -3864,6 +4418,7 @@ function resolveTriStateRiskScore(findings = []) {
     const state = String(item?.state || "").toUpperCase();
     return (
       driftStates.has(state) ||
+      item?.severity === "high" ||
       item?.severity === "warning" ||
       item?.ruleId === "ambiguous-ast" ||
       item?.ruleId === "llm-reasoning"

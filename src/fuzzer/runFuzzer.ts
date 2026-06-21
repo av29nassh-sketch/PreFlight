@@ -5,7 +5,7 @@ import { shouldIgnoreWatchPath } from "../eye/ignoreRules";
 import { PreFlightCPG } from "../cpg";
 import { PreFlightFuzzer, type FuzzResult } from "./PreFlightFuzzer";
 
-const { parseJavaScript } = require("../../taintTracker");
+const { parseSourceCode } = require("../../taintTracker");
 
 export interface ReleaseFuzzerFinding {
   type: string;
@@ -44,11 +44,30 @@ async function collectFuzzableFiles(targetDir: string): Promise<string[]> {
   });
 }
 
-export async function runFuzzerScan(targetDir: string): Promise<ReleaseFuzzerFinding[]> {
+function normalizeFuzzableFiles(targetDir: string, candidateFiles?: string[]): string[] | null {
+  if (!candidateFiles || candidateFiles.length === 0) {
+    return null;
+  }
+
+  const isInsideTargetDir = (filePath: string) => {
+    const relativePath = path.relative(targetDir, filePath);
+    return Boolean(relativePath) && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+  };
+
+  return Array.from(
+    new Set(
+      candidateFiles
+        .map((filePath) => (path.isAbsolute(filePath) ? filePath : path.resolve(targetDir, filePath)))
+        .filter((filePath) => isInsideTargetDir(filePath))
+    )
+  );
+}
+
+export async function runFuzzerScan(targetDir: string, candidateFiles?: string[]): Promise<ReleaseFuzzerFinding[]> {
   const resolvedTargetDir = path.resolve(targetDir);
   const astByFile: Record<string, unknown> = {};
   const sourceByFile: Record<string, string> = {};
-  const files = await collectFuzzableFiles(resolvedTargetDir);
+  const files = normalizeFuzzableFiles(resolvedTargetDir, candidateFiles) ?? (await collectFuzzableFiles(resolvedTargetDir));
 
   for (const filePath of files) {
     if (shouldIgnoreWatchPath(filePath) || !isFuzzableSourceFile(filePath)) {
@@ -57,7 +76,7 @@ export async function runFuzzerScan(targetDir: string): Promise<ReleaseFuzzerFin
 
     try {
       const source = await fs.readFile(filePath, "utf8");
-      astByFile[filePath] = await parseJavaScript(source);
+      astByFile[filePath] = await parseSourceCode(source, filePath);
       sourceByFile[filePath] = source;
     } catch {
       // Ignore transient files and syntax states while an AI/editor is mid-write.

@@ -11,14 +11,30 @@ const MAX_ALLOWED_TOKENS = 2500;
 const DEFAULT_REMEDIATION_MAX_TOKENS = 1800;
 const ANTHROPIC_TIMEOUT_MS = 55000;
 const BETA_KEY_TTL_DAYS = 14;
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const MAX_REMEDIATION_REQUESTS_PER_WINDOW = 10;
 const SUPABASE_BETA_KEYS_TABLE = "preflight_beta_keys";
 const PREFLIGHT_BETA_KEY_PATTERN = /^PREFLIGHT-BETA-\d{8}-[A-Z0-9]+$/i;
 const FUZZER_REMEDIATION_SYSTEM_PROMPT =
-  "You are an expert security engineer. Fix the reported vulnerability using the safest framework-appropriate mitigation for the vulnerability type and code context. Do not use markdown, backticks, headings, or explanations. Return only the raw patched source code.";
+  [
+    "You are a surgical code patcher.",
+    "Remediate the reported vulnerability in the provided source file.",
+    "",
+    "Rules:",
+    "1. ONLY modify the specific lines required to fix the vulnerability.",
+    "2. PRESERVE surrounding architecture, imports, exports, routing style, formatting, and module boundaries.",
+    "3. PRESERVE existing semantic names and user-facing language. If the code uses targetIp, keep IP-related validation/messages. If it uses domain, keep domain-related validation/messages.",
+    "4. Do NOT redefine existing modules, routers, apps, clients, or variables unless they already exist in the file.",
+    "5. If the file uses an Express router, keep using that router. Do not introduce const app = express().",
+    "6. Choose the safest framework-appropriate mitigation for the vulnerability type and code context.",
+    "7. Return ONLY the complete patched source file. No markdown, no backticks, no headings, no explanations."
+  ].join("\n");
 
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: MAX_REQUEST_BODY }));
+
+const remediationRateLimit = new Map();
 
 function createAnthropicClient() {
   return new Anthropic({
@@ -253,6 +269,47 @@ async function requirePreflightActivation(req, res, next) {
   }
 }
 
+function getRateLimitKey(req) {
+  const token = typeof req.preflightActivationToken === "string" ? req.preflightActivationToken : "anonymous";
+  const forwardedFor = req.get("x-forwarded-for");
+  const ip = typeof forwardedFor === "string" && forwardedFor.trim()
+    ? forwardedFor.split(",")[0].trim()
+    : req.ip || "unknown";
+
+  return `${token}:${ip}`;
+}
+
+function requireRemediationRateLimit(req, res, next) {
+  const now = Date.now();
+  if (remediationRateLimit.size > 1000) {
+    for (const [key, value] of remediationRateLimit.entries()) {
+      if (value.resetAt <= now) {
+        remediationRateLimit.delete(key);
+      }
+    }
+  }
+
+  const rateLimitKey = getRateLimitKey(req);
+  const existing = remediationRateLimit.get(rateLimitKey);
+
+  if (!existing || existing.resetAt <= now) {
+    remediationRateLimit.set(rateLimitKey, {
+      count: 1,
+      resetAt: now + RATE_LIMIT_WINDOW_MS
+    });
+    return next();
+  }
+
+  if (existing.count >= MAX_REMEDIATION_REQUESTS_PER_WINDOW) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
+    res.set("Retry-After", String(retryAfterSeconds));
+    return res.status(429).json({ error: "Too many remediation requests. Please retry shortly." });
+  }
+
+  existing.count += 1;
+  return next();
+}
+
 async function handleLicenseValidateRequest(req, res) {
   const token = extractPreflightActivationToken(req);
   if (!PREFLIGHT_BETA_KEY_PATTERN.test(token)) {
@@ -385,16 +442,26 @@ function normalizeExecutionTrail(executionTrail) {
 
 function buildFuzzerRemediationPrompt({ filePath, sourceCode, vulnerabilityType, breakingPayload, executionTrail }) {
   return [
-    "Fix this vulnerability.",
+    "Patch this source file surgically.",
     `File: ${filePath}`,
     `Vulnerability type: ${vulnerabilityType}`,
     `Breaking payload: ${breakingPayload}`,
     "Execution trail:",
     executionTrail.length > 0 ? executionTrail.join("\n") : "No execution trail provided.",
     "",
-    "Choose the mitigation based on the vulnerability type and surrounding framework code. For example, use parameterized queries for SQL injection, strict path normalization and base-directory allowlists for path traversal, URL protocol/domain allowlists for SSRF, and explicit authorization checks for auth bypasses.",
+    "Mitigation guide:",
+    "- SQL injection: use parameterized queries without changing database client architecture.",
+    "- Command injection: replace shell execution with argument-array APIs such as execFile/spawn and validate the same input concept already present in the code.",
+    "- SSRF: use protocol/domain allowlists while preserving URL/domain terminology already used in the route.",
+    "- Path traversal: use strict path normalization and base-directory allowlists.",
+    "- Auth bypass: add explicit authorization checks without replacing the route/module structure.",
     "",
-    "Code:",
+    "Preservation requirements:",
+    "- Keep the same Express router/app pattern already present in the file.",
+    "- Keep route names, request field names, response messages, and validation labels semantically aligned with the existing variables.",
+    "- Do not add unrelated setup code, new apps, duplicate routers, or broad rewrites.",
+    "",
+    "Source file:",
     sourceCode
   ].join("\n");
 }
@@ -506,7 +573,12 @@ async function handleRemediationRequest(req, res) {
   }
 }
 
-app.post(["/api/v1/remediation", "/api/v1/remediate"], requirePreflightActivation, handleRemediationRequest);
+app.post(
+  ["/api/v1/remediation", "/api/v1/remediate"],
+  requirePreflightActivation,
+  requireRemediationRateLimit,
+  handleRemediationRequest
+);
 
 app.use((error, _req, res, _next) => {
   if (error?.type === "entity.too.large") {

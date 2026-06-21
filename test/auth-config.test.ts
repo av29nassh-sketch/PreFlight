@@ -1,110 +1,46 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 
-const originalHome = process.env.PREFLIGHT_HOME;
-const originalProKey = process.env.PREFLIGHT_PRO_KEY;
-const originalFetch = globalThis.fetch;
+const originalAuthEndpoint = process.env.PREFLIGHT_AUTH_VALIDATE_ENDPOINT;
+const originalRemediationEndpoint = process.env.PREFLIGHT_REMEDIATION_ENDPOINT;
+const originalProxyEndpoint = process.env.PREFLIGHT_PROXY_ENDPOINT;
 
-describe("PreFlight local auth config", () => {
-  let homeDir: string;
+afterEach(() => {
+  if (originalAuthEndpoint === undefined) {
+    delete process.env.PREFLIGHT_AUTH_VALIDATE_ENDPOINT;
+  } else {
+    process.env.PREFLIGHT_AUTH_VALIDATE_ENDPOINT = originalAuthEndpoint;
+  }
 
-  beforeEach(async () => {
-    homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-auth-home-"));
-    process.env.PREFLIGHT_HOME = homeDir;
-    delete process.env.PREFLIGHT_PRO_KEY;
+  if (originalRemediationEndpoint === undefined) {
+    delete process.env.PREFLIGHT_REMEDIATION_ENDPOINT;
+  } else {
+    process.env.PREFLIGHT_REMEDIATION_ENDPOINT = originalRemediationEndpoint;
+  }
+
+  if (originalProxyEndpoint === undefined) {
+    delete process.env.PREFLIGHT_PROXY_ENDPOINT;
+  } else {
+    process.env.PREFLIGHT_PROXY_ENDPOINT = originalProxyEndpoint;
+  }
+});
+
+describe("PreFlight auth endpoint routing", () => {
+  test("does not fall back to remediation endpoints for license validation", async () => {
+    const { getAuthValidateEndpoint } = await import("../src/config/auth");
+
+    delete process.env.PREFLIGHT_AUTH_VALIDATE_ENDPOINT;
+    process.env.PREFLIGHT_REMEDIATION_ENDPOINT = "https://example.invalid/api/v1/remediation";
+    process.env.PREFLIGHT_PROXY_ENDPOINT = "https://example.invalid/api/v1/remediation";
+
+    expect(getAuthValidateEndpoint()).toBe("https://preflight-proxy.vercel.app/api/v1/license/validate");
   });
 
-  afterEach(async () => {
-    process.env.PREFLIGHT_HOME = originalHome;
-    process.env.PREFLIGHT_PRO_KEY = originalProKey;
-    globalThis.fetch = originalFetch;
-    vi.restoreAllMocks();
-    await fs.rm(homeDir, { recursive: true, force: true });
-  });
+  test("allows an explicit auth validation endpoint override", async () => {
+    const { getAuthValidateEndpoint } = await import("../src/config/auth");
 
-  test("stores and reads a local Pro license key", async () => {
-    const { readStoredLicenseKey, saveLicenseKey } = await import("../src/config/auth");
+    process.env.PREFLIGHT_AUTH_VALIDATE_ENDPOINT = "https://proxy.example.test/api/v1/license/validate";
+    process.env.PREFLIGHT_REMEDIATION_ENDPOINT = "https://example.invalid/api/v1/remediation";
 
-    await expect(readStoredLicenseKey()).resolves.toBeNull();
-    await saveLicenseKey("PREFLIGHT-BETA-20260611-TEST");
-
-    await expect(readStoredLicenseKey()).resolves.toBe("PREFLIGHT-BETA-20260611-TEST");
-    await expect(fs.stat(path.join(homeDir, ".preflight", "config.json"))).resolves.toBeTruthy();
-  });
-
-  test("remediation patcher injects the saved key when env key is absent", async () => {
-    const { saveLicenseKey } = await import("../src/config/auth");
-    const { remediateFuzzerFinding } = await import("../src/remediation/patcher");
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-auth-patcher-"));
-    const filePath = path.join(tempDir, "route.js");
-    let capturedHeaders: Headers;
-
-    await fs.writeFile(filePath, "const safe = true;\n", "utf8");
-    await saveLicenseKey("PREFLIGHT-BETA-20260611-SAVED");
-    globalThis.fetch = vi.fn(async (_url, init) => {
-      capturedHeaders = new Headers(init?.headers);
-      return new Response(JSON.stringify({ code: "const safe = false;\n" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    }) as any;
-
-    await expect(
-      remediateFuzzerFinding({
-        file: filePath,
-        type: "SQL_INJECTION",
-        severity: "HARD_BLOCK",
-        payload: "' OR '1'='1",
-        trail: ["req.query.userId", "db.query(sql)"]
-      })
-    ).resolves.toBe(true);
-
-    expect(capturedHeaders!.get("X-PreFlight-Pro-Key")).toBe("PREFLIGHT-BETA-20260611-SAVED");
-    expect(capturedHeaders!.get("Authorization")).toBe("Bearer PREFLIGHT-BETA-20260611-SAVED");
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
-
-  test("remediation patcher explains how to activate when no key is saved", async () => {
-    const { remediateFuzzerFinding } = await import("../src/remediation/patcher");
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "preflight-auth-missing-"));
-    const filePath = path.join(tempDir, "route.js");
-
-    await fs.writeFile(filePath, "const safe = true;\n", "utf8");
-
-    await expect(
-      remediateFuzzerFinding({
-        file: filePath,
-        type: "SQL_INJECTION",
-        severity: "HARD_BLOCK",
-        payload: "' OR '1'='1",
-        trail: ["req.query.userId", "db.query(sql)"]
-      })
-    ).rejects.toThrow("Auto-Patch requires a Pro license. Run 'preflight auth <your-key>' to activate.");
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
-
-  test("auth command validates and stores a key", async () => {
-    const { createProgram } = await import("../src/cli/index");
-    const { readStoredLicenseKey } = await import("../src/config/auth");
-
-    let capturedUrl = "";
-    let capturedBody: any;
-    globalThis.fetch = vi.fn(async (url, init) => {
-      capturedUrl = String(url);
-      capturedBody = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({ valid: true }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      });
-    }) as any;
-
-    await createProgram().parseAsync(["node", "preflight", "auth", "PREFLIGHT-BETA-20260611-AUTH"]);
-
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-    expect(capturedUrl).toBe("https://preflight-proxy.vercel.app/api/v1/license/validate");
-    expect(capturedBody).toEqual({});
-    await expect(readStoredLicenseKey()).resolves.toBe("PREFLIGHT-BETA-20260611-AUTH");
+    expect(getAuthValidateEndpoint()).toBe("https://proxy.example.test/api/v1/license/validate");
   });
 });

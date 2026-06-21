@@ -30,6 +30,8 @@ const CRITICAL_SINK_PATTERN =
 
 const FILE_SYSTEM_SINK_PATTERN = /\b(?:fs\.)?(?:readFile|readFileSync|writeFile|writeFileSync|createReadStream|createWriteStream|unlink|unlinkSync)\s*\(/i;
 
+const COMMAND_EXECUTION_SINK_PATTERN = /\b(?:exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(/i;
+
 const AUTH_BOUNDARY_SINK_PATTERN =
   /\b(?:authorize|authenticate|requireRole|requirePermission|checkPermission|verifySession|validateSession|isAdmin|hasRole)\s*\(/i;
 
@@ -427,6 +429,12 @@ export class PreFlightCPG {
       cpgNode.isCriticalSink = true;
       cpgNode.sinkKind = "file-system";
       markIgnoredForRule(cpgNode, "PATH_TRAVERSAL");
+    }
+
+    if (node.type === "call_expression" && COMMAND_EXECUTION_SINK_PATTERN.test(text)) {
+      cpgNode.isCriticalSink = true;
+      cpgNode.sinkKind = "command-execution";
+      markIgnoredForRule(cpgNode, "COMMAND_INJECTION");
     }
 
     if (node.type === "call_expression" && AUTH_BOUNDARY_SINK_PATTERN.test(text)) {

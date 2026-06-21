@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("malicious PreFlight Pro edge cases", () => {
-  test("Byte-Collision Attack: overlapping SQL and credential fixes abort before writing", async () => {
+  test("Byte-Collision Attack: embedded credential fixes only replace the literal secret", async () => {
     const { applyScanFixes, scanProject } = require("../index");
     const sourceCode =
       "const db = \"SELECT * FROM users WHERE id = \" + \"" + OPENAI_KEY + "\";\n";
@@ -38,13 +38,13 @@ describe("malicious PreFlight Pro edge cases", () => {
     const filePath = path.join(root, "lib/db.js");
     const findings = await scanProject(root);
 
-    await expect(
-      applyScanFixes(findings, {
-        ask: async () => "y",
-        generateParameterizedFix: async () => "client.query(\"SELECT * FROM users WHERE id = $1\", [id])"
-      })
-    ).rejects.toThrow("Overlapping PreFlight fixes");
-    expect(fs.readFileSync(filePath, "utf8")).toBe(sourceCode);
+    await applyScanFixes(findings, {
+      ask: async () => "y",
+      generateParameterizedFix: async () => "client.query(\"SELECT * FROM users WHERE id = $1\", [id])"
+    });
+
+    const fixed = fs.readFileSync(filePath, "utf8");
+    expect(fixed).toBe("const db = \"SELECT * FROM users WHERE id = \" + process.env.OPENAI_API_KEY;\n");
   });
 
   test("UTF-8 Offset Trap: complex emojis before SQL do not shift byte-splice targets", async () => {

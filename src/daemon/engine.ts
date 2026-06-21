@@ -2,6 +2,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import fg from "fast-glob";
+import { WebSocket, WebSocketServer, type WebSocket as WebSocketClient } from "ws";
 import { startWatcher, type EyeWatcherHandle } from "../eye/watcher";
 import { applyAutoPatch } from "../release-gate/patcher";
 import { runReleaseGateScan } from "../release-gate/pipeline";
@@ -16,18 +17,41 @@ import {
   getPreflightSocketPath,
   parseIpcLines
 } from "./protocol";
+import type { ReleaseFuzzerFinding } from "../fuzzer/runFuzzer";
+import type { ReleaseGateFinding } from "../release-gate/model";
+import { showWindowsHardBlockToast } from "../windows/nativeToast";
 
 export interface PreFlightDaemonOptions {
   targetDir?: string;
   socketPath?: string;
+  websocketPort?: number;
   output?: NodeJS.WritableStream;
 }
 
 export interface PreFlightDaemonHandle {
   socketPath: string;
   targetDir: string;
+  websocketUrl: string;
   close: () => Promise<void>;
 }
+
+export type PreFlightAlertMessage =
+  | {
+      type: "HARD_BLOCK";
+      filePath: string;
+      line?: number;
+      payload?: string;
+      message: string;
+      issueType: string;
+      severity: "HARD_BLOCK";
+      source: "fuzzer" | "release-gate";
+      detectedAt: string;
+    }
+  | {
+      type: "CLEAR";
+      filePath: string;
+      detectedAt: string;
+    };
 
 const EMPTY_RESULT: ReleaseGateScanResult = {
   status: "PASSED",
@@ -40,6 +64,12 @@ const EMPTY_RESULT: ReleaseGateScanResult = {
   findings: [],
   fuzzFindings: []
 };
+
+type HardBlockFinding = ReleaseFuzzerFinding | ReleaseGateFinding;
+type HardBlockAlert = Extract<PreFlightAlertMessage, { type: "HARD_BLOCK" }>;
+const NOTIFICATION_COOLDOWN_MS = 60_000;
+const PREFLIGHT_NOTIFICATION_ICON = path.resolve(__dirname, "..", "..", "assets", "preflight-notification.png");
+const DAEMON_MANIFEST_FILE = "preflight-daemon.json";
 
 async function countTrackedFiles(targetDir: string): Promise<number> {
   const files = await fg("**/*", {
@@ -60,25 +90,103 @@ function findFirstHardBlock(result: ReleaseGateScanResult) {
   );
 }
 
+function isFuzzerFinding(finding: HardBlockFinding): finding is ReleaseFuzzerFinding {
+  return "payload" in finding && "type" in finding;
+}
+
+function inferLineFromTrail(trail: string[] = []): number | undefined {
+  for (const item of trail) {
+    const match = item.match(/:(\d+)\b/);
+    if (match?.[1]) {
+      return Number(match[1]);
+    }
+  }
+
+  return undefined;
+}
+
+function resolveFindingFilePath(targetDir: string, filePath: string): string {
+  return path.isAbsolute(filePath) ? filePath : path.resolve(targetDir, filePath);
+}
+
+export function formatHardBlockAlert(targetDir: string, finding: HardBlockFinding): HardBlockAlert {
+  const filePath = resolveFindingFilePath(targetDir, finding.file);
+
+  if (isFuzzerFinding(finding)) {
+    return {
+      type: "HARD_BLOCK",
+      filePath,
+      line: inferLineFromTrail(finding.trail),
+      payload: finding.payload,
+      message: finding.issue,
+      issueType: finding.type,
+      severity: "HARD_BLOCK",
+      source: "fuzzer",
+      detectedAt: new Date().toISOString()
+    };
+  }
+
+  return {
+    type: "HARD_BLOCK",
+    filePath,
+    line: finding.line,
+    message: finding.issue,
+    issueType: finding.source,
+    severity: "HARD_BLOCK",
+    source: "release-gate",
+    detectedAt: new Date().toISOString()
+  };
+}
+
+function collectHardBlockAlerts(targetDir: string, result: ReleaseGateScanResult): HardBlockAlert[] {
+  return [
+    ...result.fuzzFindings
+      .filter((finding) => finding.severity === "HARD_BLOCK")
+      .map((finding) => formatHardBlockAlert(targetDir, finding)),
+    ...result.findings
+      .filter((finding) => finding.severity === "HARD_BLOCK")
+      .map((finding) => formatHardBlockAlert(targetDir, finding))
+  ];
+}
+
+function ensureAbsoluteAlertPath(targetDir: string, message: PreFlightAlertMessage): PreFlightAlertMessage {
+  return {
+    ...message,
+    filePath: resolveFindingFilePath(targetDir, message.filePath)
+  };
+}
+
 function safeWrite(socket: net.Socket, message: DaemonToClientMessage): void {
   if (!socket.destroyed) {
     socket.write(encodeIpcMessage(message));
   }
 }
 
+function getDaemonManifestPath(targetDir: string): string {
+  return path.join(targetDir, ".vscode", DAEMON_MANIFEST_FILE);
+}
+
 export class PreFlightDaemon {
   private clients = new Set<net.Socket>();
+  private websocketClients = new Set<WebSocketClient>();
   private server: net.Server | null = null;
+  private websocketServer: WebSocketServer | null = null;
   private watcher: EyeWatcherHandle | null = null;
   private state: DaemonState;
   private scanPromise: Promise<void> = Promise.resolve();
+  private activeHardBlockFiles = new Set<string>();
+  private notificationCooldowns = new Map<string, number>();
 
   readonly socketPath: string;
   readonly targetDir: string;
+  websocketPort: number;
+  websocketUrl: string;
 
   constructor(private readonly options: PreFlightDaemonOptions = {}) {
     this.targetDir = path.resolve(options.targetDir || process.cwd());
     this.socketPath = options.socketPath || getPreflightSocketPath(this.targetDir);
+    this.websocketPort = options.websocketPort ?? Number(process.env.PREFLIGHT_DAEMON_WS_PORT || 9001);
+    this.websocketUrl = `ws://127.0.0.1:${this.websocketPort}`;
     this.state = {
       targetDir: this.targetDir,
       trackedFiles: 0,
@@ -93,7 +201,7 @@ export class PreFlightDaemon {
 
   async start(): Promise<PreFlightDaemonHandle> {
     await this.startIpcServer();
-    await this.runScan([]);
+    await this.startWebSocketServer();
     this.watcher = startWatcher(this.targetDir, {
       output: this.options.output,
       onBatch: async (changedFiles) => {
@@ -105,6 +213,7 @@ export class PreFlightDaemon {
     return {
       socketPath: this.socketPath,
       targetDir: this.targetDir,
+      websocketUrl: this.websocketUrl,
       close: () => this.close()
     };
   }
@@ -112,6 +221,21 @@ export class PreFlightDaemon {
   async close(): Promise<void> {
     await this.watcher?.close();
     this.watcher = null;
+
+    for (const client of this.websocketClients) {
+      client.close();
+    }
+    this.websocketClients.clear();
+
+    await new Promise<void>((resolve) => {
+      if (!this.websocketServer) {
+        resolve();
+        return;
+      }
+
+      this.websocketServer.close(() => resolve());
+    });
+    this.websocketServer = null;
 
     for (const client of this.clients) {
       client.destroy();
@@ -131,6 +255,8 @@ export class PreFlightDaemon {
     if (process.platform !== "win32" && fs.existsSync(this.socketPath)) {
       fs.rmSync(this.socketPath, { force: true });
     }
+
+    this.removeDaemonManifest();
   }
 
   private async startIpcServer(): Promise<void> {
@@ -147,6 +273,65 @@ export class PreFlightDaemon {
         resolve();
       });
     });
+  }
+
+  private async startWebSocketServer(): Promise<void> {
+    this.websocketServer = new WebSocketServer({
+      host: "127.0.0.1",
+      port: this.websocketPort
+    });
+
+    this.websocketServer.on("connection", (socket) => {
+      this.websocketClients.add(socket);
+      socket.send(JSON.stringify({
+        type: "STATE",
+        targetDir: this.targetDir,
+        status: this.state.result.status,
+        lastHardBlock: this.state.lastHardBlock ? formatHardBlockAlert(this.targetDir, this.state.lastHardBlock) : null,
+        detectedAt: new Date().toISOString()
+      }));
+      socket.on("close", () => this.websocketClients.delete(socket));
+      socket.on("error", () => this.websocketClients.delete(socket));
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      this.websocketServer?.once("error", reject);
+      this.websocketServer?.once("listening", () => {
+        this.websocketServer?.off("error", reject);
+        const address = this.websocketServer?.address();
+        if (address && typeof address === "object" && typeof address.port === "number") {
+          this.websocketPort = address.port;
+          this.websocketUrl = `ws://127.0.0.1:${address.port}`;
+        }
+        this.writeDaemonManifest();
+        resolve();
+      });
+    });
+  }
+
+  private writeDaemonManifest(): void {
+    const manifestPath = getDaemonManifestPath(this.targetDir);
+    const manifest = {
+      pid: process.pid,
+      targetDir: this.targetDir,
+      websocketUrl: this.websocketUrl,
+      port: this.websocketPort,
+      updatedAt: new Date().toISOString()
+    };
+
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  }
+
+  private removeDaemonManifest(): void {
+    const manifestPath = getDaemonManifestPath(this.targetDir);
+    try {
+      if (fs.existsSync(manifestPath)) {
+        fs.rmSync(manifestPath, { force: true });
+      }
+    } catch {
+      // Best-effort cleanup only; a stale manifest is corrected on next daemon start.
+    }
   }
 
   private handleClient(socket: net.Socket): void {
@@ -192,6 +377,112 @@ export class PreFlightDaemon {
     }
   }
 
+  private broadcastWebSocket(message: PreFlightAlertMessage): void {
+    const normalizedMessage = ensureAbsoluteAlertPath(this.targetDir, message);
+    const serialized = JSON.stringify(normalizedMessage);
+    for (const client of this.websocketClients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(serialized);
+      }
+    }
+  }
+
+  private logHardBlock(alert: HardBlockAlert): void {
+    const relativeFile = path.relative(this.targetDir, alert.filePath) || path.basename(alert.filePath);
+    const line = alert.line ? `:${alert.line}` : "";
+    const payload = alert.payload ? `\nPayload: ${alert.payload}` : "";
+    const message = [
+      "\x07",
+      "",
+      "----------------------------------------",
+      "PREFLIGHT HARD BLOCK",
+      `Detected: ${alert.issueType}`,
+      `File: ${relativeFile}${line}`,
+      `Message: ${alert.message}${payload}`,
+      "Action: Open preflight dashboard . and press [P] to fix.",
+      "----------------------------------------",
+      ""
+    ].join("\n");
+
+    (this.options.output || process.stderr).write(`${message}\n`);
+  }
+
+  private maybeNotifyHardBlockFile(alerts: HardBlockAlert[]): void {
+    const primaryAlert = alerts[0];
+    if (!primaryAlert) {
+      return;
+    }
+
+    const forceWindowsFallback = process.env.PREFLIGHT_FORCE_WINDOWS_POPUP === "1";
+    if (this.websocketClients.size > 0 && !forceWindowsFallback) {
+      return;
+    }
+
+    const issueTypes = [...new Set(alerts.map((alert) => alert.issueType))];
+    const notificationKey = `${primaryAlert.filePath}:${issueTypes.join(",")}`;
+    const now = Date.now();
+    const lastNotifiedAt = this.notificationCooldowns.get(notificationKey) || 0;
+    if (now - lastNotifiedAt < NOTIFICATION_COOLDOWN_MS) {
+      return;
+    }
+
+    this.notificationCooldowns.set(notificationKey, now);
+    const relativeFile = path.relative(this.targetDir, primaryAlert.filePath) || path.basename(primaryAlert.filePath);
+    const line = primaryAlert.line ? `:${primaryAlert.line}` : "";
+    const title =
+      alerts.length === 1
+        ? `PreFlight HARD BLOCK: ${primaryAlert.issueType}`
+        : `PreFlight HARD BLOCK: ${alerts.length} vulnerabilities`;
+    const summary =
+      alerts.length === 1
+        ? `${relativeFile}${line}.`
+        : `${relativeFile}. ${issueTypes.join(", ")}.`;
+
+    const shown = showWindowsHardBlockToast({
+      filePath: primaryAlert.filePath,
+      relativeFile,
+      issueTypes,
+      line: primaryAlert.line,
+      iconPath: PREFLIGHT_NOTIFICATION_ICON
+    });
+
+    if (!shown) {
+      (this.options.output || process.stderr).write(`[PreFlight] ${title}: ${summary} Run preflight dashboard .\n`);
+    }
+  }
+
+  private broadcastAlertState(result: ReleaseGateScanResult): void {
+    const currentAlerts = collectHardBlockAlerts(this.targetDir, result).map((alert) => ({
+      ...alert,
+      filePath: resolveFindingFilePath(this.targetDir, alert.filePath)
+    }));
+    const currentFiles = new Set(currentAlerts.map((alert) => alert.filePath));
+
+    for (const staleFilePath of this.activeHardBlockFiles) {
+      if (!currentFiles.has(staleFilePath)) {
+        this.broadcastWebSocket({
+          type: "CLEAR",
+          filePath: staleFilePath,
+          detectedAt: new Date().toISOString()
+        });
+      }
+    }
+
+    const announcedFiles = new Set<string>();
+
+    for (const alert of currentAlerts) {
+      this.broadcastWebSocket(alert);
+      if (!this.activeHardBlockFiles.has(alert.filePath) && !announcedFiles.has(alert.filePath)) {
+        const fileAlerts = currentAlerts.filter((currentAlert) => currentAlert.filePath === alert.filePath);
+        this.logHardBlock(alert);
+        this.maybeNotifyHardBlockFile(fileAlerts);
+        announcedFiles.add(alert.filePath);
+      }
+    }
+
+    this.activeHardBlockFiles = currentFiles;
+  }
+
   private async runScan(changedFiles: string[]): Promise<void> {
     this.state = {
       ...this.state,
@@ -210,6 +501,7 @@ export class PreFlightDaemon {
         })
       ]);
       const lastHardBlock = findFirstHardBlock(result);
+      this.broadcastAlertState(result);
 
       this.state = {
         targetDir: this.targetDir,
@@ -245,6 +537,10 @@ export class PreFlightDaemon {
       } else {
         const fileFindings = this.state.result.findings.filter((finding) => finding.file === target.finding.file);
         const issues = fileFindings.length > 0 ? fileFindings.map((finding) => finding.issue) : [target.finding.issue];
+        this.broadcast({
+          type: "log",
+          message: `Routing ${issues.length} release-gate issue(s) for ${target.finding.file} to PreFlight Pro remediation.`
+        });
         await applyAutoPatch(path.resolve(this.targetDir, target.finding.file), issues);
       }
 

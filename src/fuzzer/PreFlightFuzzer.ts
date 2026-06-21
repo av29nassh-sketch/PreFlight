@@ -3,7 +3,7 @@ import type { CPGNode, TaintTraceResult } from "../cpg/types";
 
 export type FuzzClassification = "HARD_BLOCK" | "PASSED";
 
-export type FuzzVulnerabilityType = "SQL_INJECTION" | "PATH_TRAVERSAL" | "AUTH_BYPASS" | "UNKNOWN_TAINT";
+export type FuzzVulnerabilityType = "SQL_INJECTION" | "COMMAND_INJECTION" | "PATH_TRAVERSAL" | "AUTH_BYPASS" | "UNKNOWN_TAINT";
 
 export interface FuzzEntryPoint {
   sourceNode: CPGNode;
@@ -36,10 +36,12 @@ const SQL_INJECTION_PAYLOADS = [
 
 const PATH_TRAVERSAL_PAYLOADS = ["../../../../etc/passwd", "..\\..\\..\\Windows\\win.ini", "%2e%2e/%2e%2e/.env"];
 
+const COMMAND_INJECTION_PAYLOADS = ["127.0.0.1; cat /etc/passwd", "127.0.0.1 && whoami", "127.0.0.1 | id"];
+
 const AUTH_BYPASS_PAYLOADS = ["admin", "true", "00000000-0000-0000-0000-000000000000", "' OR role = 'admin"];
 
 const SANITIZER_PATTERN =
-  /\b(?:zod|safeParse|parse|encodeURIComponent|escape|sanitize|validator|isUUID|isEmail|Number|parseInt|parameterized|prepared)\b/i;
+  /\b(?:zod|safeParse|parse|encodeURIComponent|escape|sanitize|validator|isUUID|isEmail|Number|parseInt|parameterized|prepared|allowlist|allowedHosts|allowedTables|hostPattern)\b|(?:\.test|\.has)\s*\(/i;
 
 const PARAMETERIZED_SINK_PATTERN = /\$\d+|\?|:\w+|values\s*:|\.eq\s*\(|\.match\s*\(|\.filter\s*\(/i;
 
@@ -98,6 +100,10 @@ function classifySink(sink: CPGNode): FuzzVulnerabilityType {
     return "SQL_INJECTION";
   }
 
+  if (/exec|execSync|spawn|spawnSync|execFile|command|shell/i.test(text) || sink.sinkKind === "command-execution") {
+    return "COMMAND_INJECTION";
+  }
+
   if (/readFile|writeFile|createReadStream|unlink|path|file/i.test(text)) {
     return "PATH_TRAVERSAL";
   }
@@ -119,6 +125,10 @@ function payloadsForSink(sink: CPGNode): FuzzPayload[] {
     return PATH_TRAVERSAL_PAYLOADS.map((value) => ({ vulnerabilityType, value }));
   }
 
+  if (vulnerabilityType === "COMMAND_INJECTION") {
+    return COMMAND_INJECTION_PAYLOADS.map((value) => ({ vulnerabilityType, value }));
+  }
+
   if (vulnerabilityType === "AUTH_BYPASS") {
     return AUTH_BYPASS_PAYLOADS.map((value) => ({ vulnerabilityType, value }));
   }
@@ -133,6 +143,11 @@ function containsSanitizer(trace: CPGNode[]): boolean {
 function isParameterizedSink(trace: CPGNode[], sink: CPGNode): boolean {
   const combinedText = [...trace.map(nodeText), nodeText(sink)].join("\n");
   return PARAMETERIZED_SINK_PATTERN.test(combinedText) && !/(?:\+|\$\{)/.test(combinedText);
+}
+
+function isNonShellCommandArgumentSink(sink: CPGNode): boolean {
+  const text = nodeText(sink);
+  return /\b(?:execFile|execFileSync)\s*\(\s*["'][^"']+["']\s*,\s*\[/.test(text) && !/\bshell\s*:\s*true\b/i.test(text);
 }
 
 function dangerousPayloadSurvives(payload: FuzzPayload, trace: CPGNode[], sink: CPGNode): boolean {
@@ -151,6 +166,14 @@ function dangerousPayloadSurvives(payload: FuzzPayload, trace: CPGNode[], sink: 
 
   if (payload.vulnerabilityType === "PATH_TRAVERSAL") {
     return /readFile|writeFile|createReadStream|path|file/i.test(sinkLayout);
+  }
+
+  if (payload.vulnerabilityType === "COMMAND_INJECTION") {
+    if (isNonShellCommandArgumentSink(sink)) {
+      return false;
+    }
+
+    return /(?:\+|\$\{)/.test(sinkLayout) || /exec|execSync|spawn|spawnSync|execFile|shell/i.test(nodeText(sink));
   }
 
   if (payload.vulnerabilityType === "AUTH_BYPASS") {

@@ -1,0 +1,46 @@
+{
+  "name": "preflight-companion",
+  "displayName": "PreFlight Companion",
+  "description": "Native editor diagnostics and fixes for the PreFlight local security daemon.",
+  "version": "0.0.1",
+  "publisher": "preflight",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "activationEvents": [
+    "onStartupFinished",
+    "onLanguage:javascript",
+    "onLanguage:typescript",
+    "onCommand:preflight.fixIssue"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc -p ./"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "preflight.fixIssue",
+        "title": "PreFlight: Fix Issue"
+      }
+    ]
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "@types/ws": "^8.18.1",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.9.3"
+  }
+}

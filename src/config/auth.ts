@@ -73,8 +73,6 @@ export async function resolveLicenseKey(): Promise<string | null> {
 export function getAuthValidateEndpoint(): string {
   return (
     process.env.PREFLIGHT_AUTH_VALIDATE_ENDPOINT ||
-    process.env.PREFLIGHT_REMEDIATION_ENDPOINT ||
-    process.env.PREFLIGHT_PROXY_ENDPOINT ||
     DEFAULT_AUTH_VALIDATE_ENDPOINT
   ).trim();
 }

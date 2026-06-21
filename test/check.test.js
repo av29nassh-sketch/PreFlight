@@ -15,6 +15,31 @@ const SENDGRID_KEY = "SG." + "a".repeat(22) + "." + "b".repeat(43);
 const POSTGRES_URI = "postgres://" + "user:pass@localhost:5432/app";
 
 const roots = [];
+const EMPTY_DOTENV_PATH = path.join(os.tmpdir(), "preflight-test-empty.env");
+
+function buildIsolatedEnv(overrides = {}) {
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-test-home-"));
+  roots.push(isolatedHome);
+  const env = {
+    ...process.env,
+    DOTENV_CONFIG_PATH: EMPTY_DOTENV_PATH,
+    HOME: isolatedHome,
+    USERPROFILE: isolatedHome,
+    ...overrides
+  };
+
+  if (!Object.prototype.hasOwnProperty.call(overrides, "PREFLIGHT_PRO_KEY")) {
+    delete env.PREFLIGHT_PRO_KEY;
+  }
+  if (!Object.prototype.hasOwnProperty.call(overrides, "PREFLIGHT_PRO_LICENSE_KEY")) {
+    delete env.PREFLIGHT_PRO_LICENSE_KEY;
+  }
+  if (!Object.prototype.hasOwnProperty.call(overrides, "PREFLIGHT_TEAMS_KEY")) {
+    delete env.PREFLIGHT_TEAMS_KEY;
+  }
+
+  return env;
+}
 
 function makeProject(files) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "check-"));
@@ -41,7 +66,7 @@ function runNode(args, cwd, options = {}) {
   return spawnSync(process.execPath, args, {
     cwd,
     encoding: "utf8",
-    env: options.env ? { ...process.env, ...options.env } : process.env,
+    env: buildIsolatedEnv(options.env),
     input: options.input
   });
 }
@@ -1042,6 +1067,7 @@ describe("PreFlight Check", () => {
     try {
       process.exitCode = undefined;
       await runCli(["node", "index.js", "scan", root, "--no-color"], {
+        resolveStoredLicenseKey: async () => null,
         reportTelemetry: (findings, repoMetadata, licenseKey) =>
           new Promise((resolve) => {
             setTimeout(() => {
@@ -1761,10 +1787,15 @@ describe("PreFlight Check", () => {
     expect(sarif.version).toBe("2.1.0");
     expect(sarif.runs[0].tool.driver.rules.map((rule) => rule.id).sort()).toEqual([
       "architectural-leak",
+      "auth-bypass",
       "backend-secret",
+      "command-injection",
+      "dependency-unpinned",
       "frontend-secret",
       "missing-rls",
+      "path-traversal",
       "sql-injection",
+      "ssrf",
       "taint-violation"
     ]);
     expect(sarif.runs[0].tool.driver.rules).toEqual(

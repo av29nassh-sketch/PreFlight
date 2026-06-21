@@ -20,6 +20,19 @@ function resolveSupabaseMigrationsDir(targetDir: string): string | null {
   return fs.existsSync(candidate) && fs.statSync(candidate).isDirectory() ? candidate : null;
 }
 
+function normalizeChangedFiles(targetDir: string, changedFiles: string[]): string[] {
+  const isInsideTargetDir = (filePath: string) => {
+    const relativePath = path.relative(targetDir, filePath);
+    return Boolean(relativePath) && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+  };
+
+  return Array.from(
+    new Set(
+      changedFiles.map((filePath) => (path.isAbsolute(filePath) ? filePath : path.resolve(targetDir, filePath)))
+    )
+  ).filter((filePath) => isInsideTargetDir(filePath));
+}
+
 export async function runReleaseGateScan({
   targetDir,
   eyeActive,
@@ -30,8 +43,13 @@ export async function runReleaseGateScan({
   changedFiles?: string[];
 }): Promise<ReleaseGateScanResult> {
   const resolvedTargetDir = path.resolve(targetDir);
+  const changedFileScope = normalizeChangedFiles(resolvedTargetDir, changedFiles);
+  const scopedFiles = changedFileScope.length > 0 ? changedFileScope : undefined;
   const findings: ReleaseGateFinding[] = [];
-  const [fastCheckResult, fuzzFindings] = await Promise.all([runFastChecks(resolvedTargetDir), runFuzzerScan(resolvedTargetDir)]);
+  const [fastCheckResult, fuzzFindings] = await Promise.all([
+    runFastChecks(resolvedTargetDir, scopedFiles),
+    runFuzzerScan(resolvedTargetDir, scopedFiles)
+  ]);
 
   findings.push(
     ...fastCheckResult.findings.map((finding) => ({
@@ -44,7 +62,11 @@ export async function runReleaseGateScan({
   );
 
   const migrationsDir = resolveSupabaseMigrationsDir(resolvedTargetDir);
-  if (migrationsDir) {
+  const shouldScanMigrations =
+    migrationsDir &&
+    (!scopedFiles || scopedFiles.some((filePath) => filePath.startsWith(migrationsDir) && filePath.endsWith(".sql")));
+
+  if (shouldScanMigrations && migrationsDir) {
     const migrationResult = await scanSupabaseMigrations(migrationsDir);
 
     for (const file of migrationResult.files) {
@@ -76,7 +98,7 @@ export async function runReleaseGateScan({
     scannedAt: new Date().toISOString(),
     eye: {
       active: eyeActive,
-      changedFiles: changedFiles.map((filePath) => toDisplayPath(resolvedTargetDir, filePath))
+      changedFiles: changedFileScope.map((filePath) => toDisplayPath(resolvedTargetDir, filePath))
     },
     findings,
     fuzzFindings

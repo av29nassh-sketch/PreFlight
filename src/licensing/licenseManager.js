@@ -45,7 +45,13 @@ const TEAM_TIER_PATTERN = /\b(teams?|enterprise|organization|organisation|org|se
 const SOLO_TIER_PATTERN = /\b(solo|pro|individual|personal|single)\b/i;
 const ORG_OWNER_PATTERN = /(?:^|[-_])(org|team|teams|inc|corp|company|labs|studio|systems|solutions|technologies|engineering|enterprise|hq)(?:$|[-_])|(?:org|team|teams|inc|corp|company|labs|studio|systems|solutions|technologies|engineering|enterprise|hq)$/i;
 
-function getConfigPath(homeDir = os.homedir()) {
+function getDefaultHomeDir() {
+  return process.env.PREFLIGHT_HOME && process.env.PREFLIGHT_HOME.trim()
+    ? process.env.PREFLIGHT_HOME.trim()
+    : os.homedir();
+}
+
+function getConfigPath(homeDir = getDefaultHomeDir()) {
   return path.join(homeDir, CONFIG_DIR, CONFIG_FILE);
 }
 

@@ -4,6 +4,7 @@ coverage/
 dist/
 *.log
 *.tgz
+*.vsix
 .env
 .env.*
 demo-sandbox/
@@ -12,3 +13,4 @@ preflight.config.json
 
 .vercel
 .env*.local
+.preflight-tripwire.*
