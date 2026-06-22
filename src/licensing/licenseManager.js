@@ -37,7 +37,7 @@ const INVALID_LICENSE_MESSAGE =
 const EXPIRED_BETA_LICENSE_MESSAGE =
   "\u274c Beta license expired. Please request a fresh PreFlight beta key.";
 const ORG_ACCOUNT_DETECTED_MESSAGE =
-  "🔴 Org Account Detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator.";
+  "Org account detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator.";
 const ACTIVATION_MESSAGE = "\u2705 PreFlight Pro activated successfully! Unlimited AI auto-fixes unlocked.";
 const EMAIL_MISMATCH_MESSAGE = "\u274c Email does not match the purchase record.";
 const OFFLINE_ERROR_CODES = new Set(["EAI_AGAIN", "ECONNRESET", "ETIMEDOUT", "ENETUNREACH", "ENOTFOUND", "ECONNREFUSED"]);

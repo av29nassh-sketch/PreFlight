@@ -10,7 +10,7 @@ const EXHAUSTED_MESSAGE =
 const BETA_ACTIVE_RECEIPT =
   "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes (Expires 14 days from issue date).";
 const ORG_ACCOUNT_MESSAGE =
-  "🔴 Org Account Detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator.";
+  "Org account detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator.";
 
 function makeHome() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-license-"));

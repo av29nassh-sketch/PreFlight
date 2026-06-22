@@ -1331,7 +1331,7 @@ describe("PreFlight Check", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      "🔴 Org Account Detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator."
+      "Org account detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator."
     );
     expect(result.stdout).not.toContain("[LOCAL] AST fix available");
     expect(fs.readFileSync(path.join(root, "dangerous-code.js"), "utf8")).toBe("const stripe_key = \"" + STRIPE_KEY + "\";\n");

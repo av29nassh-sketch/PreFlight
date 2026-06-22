@@ -56,7 +56,7 @@ describe("PreFlight core modular architecture", () => {
     const diff = [
       "diff --git a/app.js b/app.js",
       "+++ b/app.js",
-      "+const stripe = \"sk_live_PREFLIGHT_DUMMY_KEY_12345\";",
+      "+const stripe = \"sk_test_PREFLIGHT_DUMMY_KEY_12345\";",
       "+db.query(\"SELECT * FROM users WHERE id = \" + userId);"
     ].join("\n");
 
@@ -66,7 +66,7 @@ describe("PreFlight core modular architecture", () => {
     expect(result.state).toBe(STATES.CONFIRMED_FINDING);
     expect(result.ok).toBe(false);
     expect(result.findings.map((finding) => finding.kind)).toEqual(["secret", "raw-sql"]);
-    expect(result.fixedDiff).toContain("sk_live_REDACTED_BY_PREFLIGHT");
+    expect(result.fixedDiff).toContain("STRIPE_SECRET_REDACTED_BY_PREFLIGHT");
     expect(result.fixedDiff).not.toContain("1234567890abcdef");
     expect(result.autoPatch).toContain("-const stripe");
     expect(result.autoPatch).toContain("+const stripe");
@@ -188,7 +188,7 @@ describe("PreFlight core modular architecture", () => {
     const patch = [
       "--- a/app.js",
       "+++ b/app.js",
-      "-const stripe = \"sk_live_PREFLIGHT_DUMMY_KEY_12345\";",
+      "-const stripe = \"sk_test_PREFLIGHT_DUMMY_KEY_12345\";",
       "+const stripe = process.env.STRIPE_SECRET_KEY;"
     ].join("\n");
 
@@ -681,7 +681,7 @@ describe("PreFlight core modular architecture", () => {
 
   test("applyScanFixes blocks deep patches that would overwrite a file already fixed in the same run", async () => {
     const { applyScanFixes } = require("../index");
-    const original = "const secret = \"sk_test_123\";\n";
+    const original = "const secret = \"sk_test_PREFLIGHT_DUMMY_KEY_12345\";\n";
     const replacement = "const secret = process.env.STRIPE_SECRET_KEY;\n";
     const root = makeProject({
       "app/api/tenant-sync/route.ts": original

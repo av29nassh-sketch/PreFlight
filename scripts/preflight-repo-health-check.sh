@@ -168,7 +168,7 @@ const bin = process.platform === "win32" ? `${process.env.PREFLIGHT_CLI_BIN}.cmd
 const diff = [
   "diff --git a/app/api/pay/route.ts b/app/api/pay/route.ts",
   "+++ b/app/api/pay/route.ts",
-  "+const stripe = \"sk_live_PREFLIGHT_DUMMY_KEY_12345\";"
+  "+const stripe = \"sk_test_PREFLIGHT_DUMMY_KEY_12345\";"
 ].join("\n");
 
 const child = spawn(bin, ["scan-diff", "--stdin", "--auto-fix"], {

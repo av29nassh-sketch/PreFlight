@@ -40,7 +40,7 @@ const SECRET_PATTERNS = [
     id: "stripe-secret",
     label: "Stripe secret key",
     regex: /\bsk_(?:live|test)_[A-Za-z0-9_=-]{8,}\b/g,
-    replacement: "sk_live_REDACTED_BY_PREFLIGHT"
+    replacement: "STRIPE_SECRET_REDACTED_BY_PREFLIGHT"
   },
   {
     id: "openai-project-key",
@@ -366,7 +366,7 @@ function buildAutoPatch(parsedDiff) {
     const replacements = file.added
       .map((line) => ({
         before: redactSecrets(line.text),
-        after: redactSecrets(line.text).replace(/(["'])sk_(?:live|test)_REDACTED_BY_PREFLIGHT\1/g, "process.env.STRIPE_SECRET_KEY")
+        after: redactSecrets(line.text).replace(/(["'])STRIPE_SECRET_REDACTED_BY_PREFLIGHT\1/g, "process.env.STRIPE_SECRET_KEY")
       }))
       .filter((line) => line.before !== line.after);
 
