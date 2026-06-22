@@ -78,7 +78,7 @@ describe("cloudReporter", () => {
       .digest("hex");
 
     expect(requests[0].headers["X-PreFlight-Signature"]).toBe(`sha256=${expectedSignature}`);
-    expect(requests[0].body).not.toContain("sk_live_DO_NOT_SEND");
+    expect(requests[0].body).not.toContain("sk_live_PREFLIGHT_DUMMY_KEY_12345");
     expect(requests[0].body).not.toContain("fetch(secret)");
     expect(body).toMatchObject({
       licenseKey,

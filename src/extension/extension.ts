@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as childProcess from 'node:child_process';
 import * as vscode from 'vscode';
+import ts = require('typescript');
 import WebSocket = require('ws');
 
 type PreFlightAlertMessage = {
@@ -54,6 +55,7 @@ const DAEMON_RECONNECT_LIMIT = 20;
 const diagnosticsByUri = new Map<string, PreFlightAlertMessage[]>();
 const diagnosticObjectsByUri = new Map<string, vscode.Diagnostic[]>();
 const pendingAlertPopups = new Map<string, NodeJS.Timeout>();
+const pendingVerificationResolvers = new Map<string, Array<() => void>>();
 let managedDaemon: childProcess.ChildProcess | null = null;
 
 function getConfigPath(): string {
@@ -256,6 +258,36 @@ function resolvePatchedCode(originalCode: string, remediationText: string): stri
     return fencedCode || remediationText;
 }
 
+function shouldSyntaxValidatePatch(filePath: string): boolean {
+    return /\.(?:[cm]?[jt]sx?)$/i.test(filePath);
+}
+
+function assertPatchedSyntaxSafe(filePath: string, patchedCode: string): void {
+    if (!shouldSyntaxValidatePatch(filePath)) {
+        return;
+    }
+
+    const result = ts.transpileModule(patchedCode, {
+        fileName: filePath,
+        compilerOptions: {
+            allowJs: true,
+            checkJs: false,
+            jsx: ts.JsxEmit.ReactJSX,
+            module: ts.ModuleKind.CommonJS,
+            target: ts.ScriptTarget.ES2020
+        },
+        reportDiagnostics: true,
+        transformers: undefined
+    });
+    const syntaxErrors = (result.diagnostics || []).filter((diagnostic) => {
+        return diagnostic.category === ts.DiagnosticCategory.Error;
+    });
+
+    if (syntaxErrors.length > 0) {
+        throw new Error('PreFlight aborted the fix: AI generated malformed syntax.');
+    }
+}
+
 function getLineText(sourceCode: string, line?: number): string {
     if (!line || line < 1) {
         return '';
@@ -423,6 +455,8 @@ function scheduleConsolidatedPopup(uri: vscode.Uri, lineRange: vscode.Range): vo
 }
 
 async function replaceDocument(document: vscode.TextDocument, patchedCode: string): Promise<void> {
+    assertPatchedSyntaxSafe(document.uri.fsPath, patchedCode);
+
     const edit = new vscode.WorkspaceEdit();
     const fullRange = new vscode.Range(
         document.positionAt(0),
@@ -436,6 +470,30 @@ async function replaceDocument(document: vscode.TextDocument, patchedCode: strin
     }
 
     await document.save();
+}
+
+function waitForPostFixVerification(uri: vscode.Uri, timeoutMs = 6000): Promise<void> {
+    const uriKey = uri.toString();
+
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            const resolvers = pendingVerificationResolvers.get(uriKey) || [];
+            pendingVerificationResolvers.set(
+                uriKey,
+                resolvers.filter((candidate) => candidate !== onClear)
+            );
+            reject(new Error('PreFlight saved the fix, but the daemon has not confirmed the vulnerability is gone yet.'));
+        }, timeoutMs);
+
+        const onClear = () => {
+            clearTimeout(timeout);
+            resolve();
+        };
+
+        const resolvers = pendingVerificationResolvers.get(uriKey) || [];
+        resolvers.push(onClear);
+        pendingVerificationResolvers.set(uriKey, resolvers);
+    });
 }
 
 function getWorkspaceRoot(): string | null {
@@ -624,11 +682,10 @@ export function activate(context: vscode.ExtensionContext) {
                 const document = await vscode.workspace.openTextDocument(uri);
                 const sourceCode = document.getText();
                 const remediation = await requestPreFlightRemediation(alert, sourceCode);
+                const verifiedClear = waitForPostFixVerification(uri);
                 await replaceDocument(document, remediation.patchedCode);
+                await verifiedClear;
                 await recordFreeFixUsageIfNeeded(remediation.entitlement);
-                diagnosticCollection.delete(uri);
-                diagnosticsByUri.delete(uri.toString());
-                diagnosticObjectsByUri.delete(uri.toString());
             }
         ).then(
             () => vscode.window.showInformationMessage('Vulnerability remediated by PreFlight AI.'),
@@ -642,14 +699,20 @@ export function activate(context: vscode.ExtensionContext) {
 
         if (message.type === 'CLEAR' && message.filePath) {
             const uri = vscode.Uri.file(message.filePath);
+            const uriKey = uri.toString();
+            const resolvers = pendingVerificationResolvers.get(uriKey) || [];
+            pendingVerificationResolvers.delete(uriKey);
+            for (const resolve of resolvers) {
+                resolve();
+            }
             diagnosticCollection.delete(uri);
-            diagnosticsByUri.delete(uri.toString());
-            diagnosticObjectsByUri.delete(uri.toString());
+            diagnosticsByUri.delete(uriKey);
+            diagnosticObjectsByUri.delete(uriKey);
             updateStatusBar();
-            const pendingTimer = pendingAlertPopups.get(uri.toString());
+            const pendingTimer = pendingAlertPopups.get(uriKey);
             if (pendingTimer) {
                 clearTimeout(pendingTimer);
-                pendingAlertPopups.delete(uri.toString());
+                pendingAlertPopups.delete(uriKey);
             }
             return;
         }

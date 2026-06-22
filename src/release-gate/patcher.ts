@@ -8,7 +8,10 @@ import {
   type FixEntitlement
 } from "../config/fixEntitlement";
 
+const { parseSourceForValidation } = require("../../remediationEngine");
+
 const PREFLIGHT_PROXY_REMEDIATION_ENDPOINT = "https://preflight-proxy.vercel.app/api/v1/remediation";
+const MALFORMED_SYNTAX_MESSAGE = "PreFlight aborted the fix: AI generated malformed syntax.";
 
 interface TextContentBlock {
   type: "text";
@@ -117,6 +120,47 @@ function sanitizePatchedCode(value: string): string {
     .replace(/^```[a-zA-Z0-9_-]*\s*/u, "")
     .replace(/\s*```$/u, "")
     .trim();
+}
+
+function shouldSyntaxValidatePatch(filePath: string): boolean {
+  return /\.(?:[cm]?[jt]sx?)$/i.test(filePath);
+}
+
+function hasParseError(node: any): boolean {
+  if (!node) {
+    return false;
+  }
+
+  if (node.type === "ERROR" || node.hasError === true) {
+    return true;
+  }
+
+  for (let index = 0; index < (node.childCount || 0); index += 1) {
+    if (hasParseError(node.child(index))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function assertPatchSyntaxSafe(filePath: string, patchedCode: string): Promise<void> {
+  if (!shouldSyntaxValidatePatch(filePath)) {
+    return;
+  }
+
+  try {
+    const tree = await parseSourceForValidation(patchedCode, filePath);
+    if (hasParseError(tree?.rootNode)) {
+      throw new Error(MALFORMED_SYNTAX_MESSAGE);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === MALFORMED_SYNTAX_MESSAGE) {
+      throw error;
+    }
+
+    throw new Error(MALFORMED_SYNTAX_MESSAGE);
+  }
 }
 
 function extractProxyText(response: PreFlightProxyResponse): string {
@@ -239,6 +283,12 @@ export async function applyAutoPatch(filePath: string, issues: string[]): Promis
 
   if (unresolvedIssues.length > 0) {
     currentContent = await runProxyPatch(filePath, currentContent, unresolvedIssues, entitlement);
+    try {
+      await assertPatchSyntaxSafe(filePath, currentContent);
+    } catch (error) {
+      console.error(MALFORMED_SYNTAX_MESSAGE);
+      throw error;
+    }
   }
 
   fs.writeFileSync(filePath, currentContent.endsWith("\n") ? currentContent : `${currentContent}\n`, "utf8");

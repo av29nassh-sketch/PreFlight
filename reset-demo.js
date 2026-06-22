@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
   const data = await req.json();
   
   // ❌ FLAW 1: the assistant confidently inlined the production token
-  const STRIPE_SECRET = "sk_live_DEMO_REDACTED_PLACEHOLDER"; 
+  const STRIPE_SECRET = "sk_live_PREFLIGHT_DUMMY_KEY_12345"; 
   
   // ❌ FLAW 2: AI used the master service_role client to fetch user data blindly
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);

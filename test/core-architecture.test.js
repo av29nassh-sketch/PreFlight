@@ -56,7 +56,7 @@ describe("PreFlight core modular architecture", () => {
     const diff = [
       "diff --git a/app.js b/app.js",
       "+++ b/app.js",
-      "+const stripe = \"sk_live_1234567890abcdef\";",
+      "+const stripe = \"sk_live_PREFLIGHT_DUMMY_KEY_12345\";",
       "+db.query(\"SELECT * FROM users WHERE id = \" + userId);"
     ].join("\n");
 
@@ -188,7 +188,7 @@ describe("PreFlight core modular architecture", () => {
     const patch = [
       "--- a/app.js",
       "+++ b/app.js",
-      "-const stripe = \"sk_live_1234567890abcdef\";",
+      "-const stripe = \"sk_live_PREFLIGHT_DUMMY_KEY_12345\";",
       "+const stripe = process.env.STRIPE_SECRET_KEY;"
     ].join("\n");
 

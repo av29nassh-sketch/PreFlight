@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 const originalFetch = globalThis.fetch;
 const originalProKey = process.env.PREFLIGHT_PRO_KEY;
+const originalPreflightHome = process.env.PREFLIGHT_HOME;
 
 function makeTempFile(sourceCode: string): string {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-release-patch-"));
@@ -17,6 +18,7 @@ describe("release-gate applyAutoPatch", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     process.env.PREFLIGHT_PRO_KEY = originalProKey;
+    process.env.PREFLIGHT_HOME = originalPreflightHome;
     vi.restoreAllMocks();
   });
 
@@ -78,5 +80,40 @@ describe("release-gate applyAutoPatch", () => {
     });
     expect(requestBody.executionTrail.join("\n")).toContain("Stripe secret key detected");
     expect(fs.readFileSync(filePath, "utf8")).toContain("process.env.STRIPE_SECRET_KEY");
+  });
+
+  test("aborts malformed proxy output before writing or counting a free fix", async () => {
+    const { applyAutoPatch } = await import("../src/release-gate/patcher");
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-release-home-"));
+    const originalSource = [
+      "const { exec } = require('child_process');",
+      "router.post('/ping-server', (req, res) => {",
+      "  const targetIp = req.body.ip;",
+      "  const sysCommand = \"ping -c 4 \" + targetIp;",
+      "  exec(sysCommand);",
+      "});",
+      ""
+    ].join("\n");
+    const filePath = makeTempFile(originalSource);
+
+    delete process.env.PREFLIGHT_PRO_KEY;
+    process.env.PREFLIGHT_HOME = homeDir;
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({ code: "const =" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as any;
+
+    await expect(
+      applyAutoPatch(filePath, [
+        "Command injection risk: user-controlled input flows into exec(sysCommand)."
+      ])
+    ).rejects.toThrow("PreFlight aborted the fix: AI generated malformed syntax.");
+
+    expect(fs.readFileSync(filePath, "utf8")).toBe(originalSource);
+
+    const configPath = path.join(homeDir, ".preflight", "config.json");
+    expect(fs.existsSync(configPath)).toBe(false);
   });
 });
