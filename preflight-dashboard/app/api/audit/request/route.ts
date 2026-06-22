@@ -84,19 +84,6 @@ async function notifyDiscordAuditRequest({
   return true;
 }
 
-async function ensureAuditRequestTable() {
-  await prisma.$executeRaw`
-    CREATE TABLE IF NOT EXISTS "AuditRequest" (
-      "id" TEXT PRIMARY KEY,
-      "inputType" TEXT NOT NULL,
-      "target" TEXT NOT NULL,
-      "email" TEXT NOT NULL,
-      "status" TEXT NOT NULL DEFAULT 'new',
-      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `;
-}
-
 export async function POST(request: NextRequest) {
   let body: unknown;
 
@@ -114,14 +101,24 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  await ensureAuditRequestTable();
-
   const auditId = randomUUID();
 
-  await prisma.$executeRaw`
-    INSERT INTO "AuditRequest" ("id", "inputType", "target", "email")
-    VALUES (${auditId}, ${parsed.data.inputType}, ${parsed.data.target}, ${parsed.data.email})
-  `;
+  try {
+    await prisma.$executeRaw`
+      INSERT INTO "AuditRequest" ("id", "inputType", "target", "email")
+      VALUES (${auditId}, ${parsed.data.inputType}, ${parsed.data.target}, ${parsed.data.email})
+    `;
+  } catch (error) {
+    console.error("Audit request database insert failed", {
+      auditId,
+      error: error instanceof Error ? error.message : "Unknown error"
+    });
+
+    return NextResponse.json(
+      { error: "Could not save audit request. Please try again in a minute." },
+      { status: 500 }
+    );
+  }
 
   let notificationSent = false;
   try {
