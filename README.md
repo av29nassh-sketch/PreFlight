@@ -77,13 +77,15 @@ PreFlight is now powered by deeper local analysis primitives:
 - **Micro-Fuzzer:** Generates focused security payloads for risky data-flow paths, such as SQL injection, command injection, auth bypass, SSRF, and path traversal.
 - **Quantized CPG (Code Property Graph):** Builds a compact in-memory graph of syntax, control flow, and data flow so PreFlight can trace untrusted input into dangerous sinks instead of relying on brittle string matching.
 
-## The Tri-State Risk Score Engine
+## Tri-State Risk Score Engine
 
-PreFlight parses your code down to an Abstract Syntax Tree (AST) using Tree-Sitter, then classifies risk into three states:
+This is the core PreFlight signal. Every scan resolves into one of three clear outcomes so you know whether to stop, review, or ship.
 
-- **Hard Block:** Exposed frontend secrets, leaking database service roles, command execution, SQL injection, or missing Supabase Row Level Security (RLS).
-- **High-Risk Drift:** Structural state inconsistencies, un-idempotent webhooks, weak validation, or open CORS contexts.
-- **Likely Safe:** Standard local edits matching your expected stack rules.
+| Score | Meaning | What It Catches |
+| --- | --- | --- |
+| Red: **Hard Block** | Stop immediately. This change is unsafe to ship. | Exposed frontend secrets, leaking database service roles, command execution, SQL injection, or missing Supabase Row Level Security (RLS). |
+| Yellow: **High-Risk Drift** | Review carefully. The code may be structurally wrong even if it runs. | Structural state inconsistencies, un-idempotent webhooks, weak validation, or open CORS contexts. |
+| Green: **Pass** | Safe to continue. No blocking structural risk was detected. | Standard local edits matching your expected stack rules. |
 
 ## 2-Phase Pipeline
 
@@ -122,7 +124,7 @@ PreFlight is designed to be used as a closed loop, not a one-shot scanner:
 2. Run `preflight scan .` to classify the change under the Tri-State Risk Score.
 3. If PreFlight returns `Hard Block`, stop and repair the structural issue before moving forward.
 4. If PreFlight returns `High-Risk Drift`, run `preflight scan . --fix` and inspect every proposed fix before applying it.
-5. Re-run `preflight scan .` after each accepted fix to confirm the repository settles into `Likely Safe`.
+5. Re-run `preflight scan .` after each accepted fix to confirm the repository settles into `Pass`.
 6. Ship only after the final verification pass is green and the structural receipt matches the architecture boundary you intended.
 
 This verification loop is the product: scan, review, patch, re-scan, then deploy with confidence.
