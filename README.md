@@ -83,9 +83,9 @@ This is the core PreFlight signal. Every scan resolves into one of three clear o
 
 | Score | Meaning | What It Catches |
 | --- | --- | --- |
-| Red: **Hard Block** | Stop immediately. This change is unsafe to ship. | Exposed frontend secrets, leaking database service roles, command execution, SQL injection, or missing Supabase Row Level Security (RLS). |
-| Yellow: **High-Risk Drift** | Review carefully. The code may be structurally wrong even if it runs. | Structural state inconsistencies, un-idempotent webhooks, weak validation, or open CORS contexts. |
-| Green: **Pass** | Safe to continue. No blocking structural risk was detected. | Standard local edits matching your expected stack rules. |
+| 🔴 **Hard Block** | Stop immediately. This change is unsafe to ship. | Exposed frontend secrets, leaking database service roles, command execution, SQL injection, or missing Supabase Row Level Security (RLS). |
+| 🟡 **High-Risk Drift** | Review carefully. The code may be structurally wrong even if it runs. | Structural state inconsistencies, un-idempotent webhooks, weak validation, or open CORS contexts. |
+| 🟢 **Pass** | Safe to continue. No blocking structural risk was detected. | Standard local edits matching your expected stack rules. |
 
 ## 2-Phase Pipeline
 
