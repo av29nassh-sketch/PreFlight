@@ -44,6 +44,14 @@ function formatAuditTargetForDiscord(inputType: keyof typeof auditTypeLabels, ta
   return target.length > 1000 ? `${target.slice(0, 997)}...` : target;
 }
 
+function formatAuditTargetForTelegram(inputType: keyof typeof auditTypeLabels, target: string) {
+  if (inputType === "code") {
+    return `Code block submitted (${target.length.toLocaleString()} characters). Stored in AuditRequest.`;
+  }
+
+  return target.length > 2500 ? `${target.slice(0, 2497)}...` : target;
+}
+
 async function notifyDiscordAuditRequest({
   id,
   inputType,
@@ -113,6 +121,52 @@ async function notifyDiscordAuditRequest({
   return true;
 }
 
+async function notifyTelegramAuditRequest({
+  id,
+  inputType,
+  target,
+  email
+}: {
+  id: string;
+  inputType: keyof typeof auditTypeLabels;
+  target: string;
+  email: string;
+}) {
+  const botToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+  const chatId = process.env.TELEGRAM_CHAT_ID?.trim();
+  if (!botToken || !chatId) {
+    return false;
+  }
+
+  const text = [
+    "New PreFlight Audit Request",
+    "",
+    `Type: ${auditTypeLabels[inputType]}`,
+    `Email: ${email}`,
+    `Audit ID: ${id}`,
+    "",
+    `Target: ${formatAuditTargetForTelegram(inputType, target)}`
+  ].join("\n");
+
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: true
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Telegram notification failed with status ${response.status}`);
+  }
+
+  return true;
+}
+
 async function ensureAuditRequestTable() {
   await getAuditPool().query(`
     CREATE TABLE IF NOT EXISTS "AuditRequest" (
@@ -167,9 +221,9 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  let notificationSent = false;
+  let discordNotificationSent = false;
   try {
-    notificationSent = await notifyDiscordAuditRequest({
+    discordNotificationSent = await notifyDiscordAuditRequest({
       id: auditId,
       inputType: parsed.data.inputType,
       target: parsed.data.target,
@@ -182,5 +236,25 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  return NextResponse.json({ ok: true, notificationSent });
+  let telegramNotificationSent = false;
+  try {
+    telegramNotificationSent = await notifyTelegramAuditRequest({
+      id: auditId,
+      inputType: parsed.data.inputType,
+      target: parsed.data.target,
+      email: parsed.data.email
+    });
+  } catch (error) {
+    console.error("Audit request Telegram notification failed", {
+      auditId,
+      error: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+
+  return NextResponse.json({
+    ok: true,
+    notificationSent: discordNotificationSent || telegramNotificationSent,
+    discordNotificationSent,
+    telegramNotificationSent
+  });
 }
