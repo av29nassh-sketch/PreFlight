@@ -60,12 +60,20 @@ async function notifyDiscordAuditRequest({
     return false;
   }
 
+  const mentionUserId = process.env.DISCORD_MENTION_USER_ID?.trim();
+  const mentionPrefix = mentionUserId ? `<@${mentionUserId}> ` : "";
+  const content = `${mentionPrefix}New PreFlight audit request received: ${auditTypeLabels[inputType]} from ${email}`;
+
   const response = await fetch(webhookUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
+      content,
+      allowed_mentions: mentionUserId
+        ? { users: [mentionUserId] }
+        : { parse: [] },
       embeds: [
         {
           title: "New PreFlight Audit Request",
