@@ -148,35 +148,35 @@ export async function mergePreflightMcpServer(filePath: string, output: Output =
 function printBox(title: string, lines: string[], output: Output = process.stdout): void {
   const visibleLines = [title, ...lines];
   const width = Math.max(...visibleLines.map((line) => line.length), 32) + 4;
-  const border = "─".repeat(width - 2);
+  const border = "-".repeat(width - 2);
 
-  output.write(`${pc.cyan(`┌${border}┐`)}\n`);
-  output.write(`${pc.cyan("│")} ${pc.bold(title.padEnd(width - 4))} ${pc.cyan("│")}\n`);
-  output.write(`${pc.cyan(`├${border}┤`)}\n`);
+  output.write(`${pc.cyan(`+${border}+`)}\n`);
+  output.write(`${pc.cyan("|")} ${pc.bold(title.padEnd(width - 4))} ${pc.cyan("|")}\n`);
+  output.write(`${pc.cyan(`+${border}+`)}\n`);
   for (const line of lines) {
-    output.write(`${pc.cyan("│")} ${line.padEnd(width - 4)} ${pc.cyan("│")}\n`);
+    output.write(`${pc.cyan("|")} ${line.padEnd(width - 4)} ${pc.cyan("|")}\n`);
   }
-  output.write(`${pc.cyan(`└${border}┘`)}\n`);
+  output.write(`${pc.cyan(`+${border}+`)}\n`);
 }
 
 async function configureCursor(output: Output): Promise<void> {
   const filePath = await firstExistingOrPrimary(getCursorConfigCandidates());
   await mergePreflightMcpServer(filePath, output);
-  output.write(`${pc.green("✔")} Cursor MCP configured at ${filePath}\n`);
+  output.write(`${pc.green("[OK]")} Cursor MCP configured at ${filePath}\n`);
   output.write(`${pc.bold("Restart Cursor")} to load the PreFlight MCP server.\n`);
 }
 
 async function configureWindsurf(output: Output): Promise<void> {
   const filePath = getWindsurfConfigPath();
   await mergePreflightMcpServer(filePath, output);
-  output.write(`${pc.green("✔")} Windsurf MCP configured at ${filePath}\n`);
+  output.write(`${pc.green("[OK]")} Windsurf MCP configured at ${filePath}\n`);
   output.write(`${pc.bold("Restart Windsurf")} to load the PreFlight MCP server.\n`);
 }
 
 async function configureClaudeDesktop(output: Output): Promise<void> {
   const filePath = getClaudeDesktopConfigPath();
   await mergePreflightMcpServer(filePath, output);
-  output.write(`${pc.green("✔")} Claude Desktop MCP configured at ${filePath}\n`);
+  output.write(`${pc.green("[OK]")} Claude Desktop MCP configured at ${filePath}\n`);
   output.write(`${pc.bold("Restart Claude Desktop")} to load the PreFlight MCP server.\n`);
 }
 
@@ -184,14 +184,14 @@ function configureClaudeCode(output: Output): void {
   childProcess.execSync("claude mcp add preflight -- preflight mcp", {
     stdio: "inherit"
   });
-  output.write(`${pc.green("✔")} Claude Code MCP server registered as ${pc.bold("preflight")}.\n`);
+  output.write(`${pc.green("[OK]")} Claude Code MCP server registered as ${pc.bold("preflight")}.\n`);
 }
 
 function printVsCodeGuide(output: Output): void {
   printBox("VS Code Extensions", [
-    "• For GitHub Copilot / Codex: Simply install the PreFlight VS Code Extension (.vsix).",
+    "- For GitHub Copilot / Codex: Simply install the PreFlight VS Code Extension (.vsix).",
     "  It automatically registers via VS Code's native Language Model MCP API. No configuration needed!",
-    "• For Roo Code / Cline / Devins: Open your AI extension settings inside VS Code, navigate",
+    "- For Roo Code / Cline / Devins: Open your AI extension settings inside VS Code, navigate",
     "  to 'MCP Resource/Servers Configuration', and add 'preflight mcp' manually."
   ], output);
 }
