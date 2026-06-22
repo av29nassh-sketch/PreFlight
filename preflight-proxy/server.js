@@ -15,6 +15,7 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const MAX_REMEDIATION_REQUESTS_PER_WINDOW = 10;
 const SUPABASE_BETA_KEYS_TABLE = "preflight_beta_keys";
 const PREFLIGHT_BETA_KEY_PATTERN = /^PREFLIGHT-BETA-\d{8}-[A-Z0-9]+$/i;
+const FREE_FIX_PROXY_TOKEN = "PREFLIGHT-FREE-FIX";
 const FUZZER_REMEDIATION_SYSTEM_PROMPT =
   [
     "You are a surgical code patcher.",
@@ -53,6 +54,10 @@ function extractPreflightActivationToken(req) {
 
   const legacyHeader = req.get("X-PreFlight-Pro-Key");
   return typeof legacyHeader === "string" ? legacyHeader.trim() : "";
+}
+
+function isFreeFixEntitlementRequest(req, token) {
+  return token === FREE_FIX_PROXY_TOKEN && req.get("X-PreFlight-Free-Fix") === "1";
 }
 
 function getSupabaseRestConfig() {
@@ -248,6 +253,16 @@ async function validateBetaKeyOnly(token, now = new Date()) {
 
 async function requirePreflightActivation(req, res, next) {
   const token = extractPreflightActivationToken(req);
+  if (isFreeFixEntitlementRequest(req, token)) {
+    req.preflightActivationToken = FREE_FIX_PROXY_TOKEN;
+    req.preflightActivationRecord = {
+      tier: "free",
+      activated_at: null,
+      expires_at: null
+    };
+    return next();
+  }
+
   if (!PREFLIGHT_BETA_KEY_PATTERN.test(token)) {
     return res.status(401).json({ error: "Unauthorized" });
   }

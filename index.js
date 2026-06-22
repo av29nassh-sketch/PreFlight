@@ -3825,6 +3825,8 @@ async function routeAmbiguousFindingsToReasoning(findings, options = {}) {
     microRouter: options.microRouter || {
       evaluate: async () => ({ requires_deep_scan: true, routed: "ambiguous-ast" })
     },
+    allowFreeProxy: options.allowFreeProxy === true,
+    freeFix: options.allowFreeProxy === true,
     ...(options.reasoningEngine ? { reasoningEngine: options.reasoningEngine } : {}),
     ...(options.reasoningOptions ? { reasoningOptions: options.reasoningOptions } : {})
   });
@@ -4252,6 +4254,7 @@ async function applyScanFixes(findings, options = {}) {
           const replacement = usesDefaultSqlRemediator
             ? await generateParameterizedFix(fix.rawSnippet, {
                 localOnly: options.localOnlySqlRemediation === true,
+                allowFreeProxy: options.allowFreeProxy === true,
                 onResolution: ({ engine } = {}) => {
                   if (engine) {
                     resolvedEngine = engine;
@@ -4263,6 +4266,7 @@ async function applyScanFixes(findings, options = {}) {
               })
             : await generateParameterizedFix(fix.rawSnippet, {
                 localOnly: options.localOnlySqlRemediation === true,
+                allowFreeProxy: options.allowFreeProxy === true,
                 onResolution: ({ engine } = {}) => {
                   if (engine) {
                     resolvedEngine = engine;
@@ -5193,29 +5197,24 @@ async function runCli(argv = process.argv, options = {}) {
           : await scanProject(rootDir, { policy: scanPolicy });
       suppressedIssues = Array.isArray(findings.suppressedIssues) ? findings.suppressedIssues : [];
 
-      const hasProAccess = hasProEngineAccess(process.env);
-      const complexFindings = findings.filter(isComplexStructuralFinding);
-
-      if (!hasProAccess && complexFindings.length > 0) {
-        output.write(`${ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE}\n`);
-        fixResult = mergeFixResults(localFixResult, {
-          attempted: 0,
-          applied: 0,
-          skipped: 0,
-          unsupported: complexFindings.length
-        });
-      } else {
+      {
         let proPhaseBannerPrinted = false;
         if (
           findings.some(isAmbiguousAstFinding) &&
-          (forceRouteAmbiguous === true || options.routeAmbiguous === true || shouldRouteAmbiguousFindings(process.env))
+          (
+            forceRouteAmbiguous === true ||
+            options.routeAmbiguous === true ||
+            permission?.tier === "free" ||
+            shouldRouteAmbiguousFindings(process.env)
+          )
         ) {
           output.write(renderFixPhaseBanner("pro"));
           proPhaseBannerPrinted = true;
           try {
             const reasoningResult = await routeAmbiguousFindingsToReasoning(findings, {
               rootDir,
-              routeDeepRemediation
+              routeDeepRemediation,
+              allowFreeProxy: permission?.tier === "free"
             });
             findings = mergeReasoningFindings(findings, reasoningResult, rootDir);
           } catch (error) {
@@ -5241,7 +5240,8 @@ async function runCli(argv = process.argv, options = {}) {
           output,
           input: options.input,
           ask: options.ask,
-          rootDir
+          rootDir,
+          allowFreeProxy: permission?.tier === "free"
         });
         fixResult = mergeFixResults(localFixResult, proFixResult);
       }

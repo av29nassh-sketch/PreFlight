@@ -48,6 +48,7 @@ const ADVANCED_REMEDIATION_REQUIRES_PRO_MESSAGE =
   "⚠️ Advanced structural flaws detected. The free tier handles basic safety fixes. To unlock deep reasoning remediation and fix everything, join the invite-only beta at our website to get your PREFLIGHT_PRO_KEY.";
 const PRO_ENGINE_CONNECTION_ERROR =
   "🔴 PreFlight Pro Engine connection timed out or license invalid. Please verify your PREFLIGHT_PRO_KEY.";
+const FREE_FIX_PROXY_TOKEN = "PREFLIGHT-FREE-FIX";
 
 function formatProviderFailureMessage(error, provider) {
   if (!provider) {
@@ -279,9 +280,12 @@ async function verifyPatchedSourceSyntax(filePath, proposedSource) {
 function resolveLlmProvider(env = process.env, options = {}) {
   const modelOverride = options.model || env.MODEL_NAME;
   const proKey = options.licenseKey || env.PREFLIGHT_PRO_KEY || env.PREFLIGHT_PRO_LICENSE_KEY;
-  if (proKey) {
+  const freeFixKey = options.allowFreeProxy === true ? FREE_FIX_PROXY_TOKEN : null;
+  const resolvedKey = proKey || freeFixKey;
+  if (resolvedKey) {
     return {
-      apiKey: proKey,
+      apiKey: resolvedKey,
+      isFreeFix: !proKey && Boolean(freeFixKey),
       baseURL: options.baseURL || options.endpoint || env.PREFLIGHT_PRO_PROXY_BASE_URL || env.PREFLIGHT_CLOUD_BASE_URL || DEFAULT_PREFLIGHT_PROXY_BASE_URL,
       endpoint: options.endpoint || options.baseURL || env.PREFLIGHT_PRO_PROXY_BASE_URL || env.PREFLIGHT_CLOUD_BASE_URL || DEFAULT_PREFLIGHT_PROXY_BASE_URL,
       model: modelOverride || DEFAULT_ANTHROPIC_MODEL,
@@ -790,6 +794,7 @@ async function generateParameterizedFix(rawSnippet, options = {}) {
       response = await requestPreflightProxy({
         endpoint: provider.endpoint,
         licenseKey: provider.apiKey,
+        freeFix: provider.isFreeFix === true,
         system: SURGICAL_LLM_SYSTEM_PROMPT,
         userContent: rawSnippet,
         maxTokens: options.maxTokens || DEFAULT_LLM_MAX_TOKENS,

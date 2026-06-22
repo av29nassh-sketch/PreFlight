@@ -7,6 +7,7 @@ function buildPreflightProxyRequest(options = {}) {
     ? options.endpoint.trim()
     : DEFAULT_PREFLIGHT_PROXY_ENDPOINT;
   const licenseKey = typeof options.licenseKey === "string" ? options.licenseKey.trim() : "";
+  const isFreeFix = options.freeFix === true;
   const system = typeof options.system === "string" ? options.system : "";
   const userContent = typeof options.userContent === "string" ? options.userContent : "";
   const maxTokens = Number(options.maxTokens);
@@ -49,7 +50,9 @@ function buildPreflightProxyRequest(options = {}) {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${licenseKey}`,
-      "X-PreFlight-Pro-Key": licenseKey
+      ...(isFreeFix
+        ? { "X-PreFlight-Free-Fix": "1" }
+        : { "X-PreFlight-Pro-Key": licenseKey })
     },
     payload
   };

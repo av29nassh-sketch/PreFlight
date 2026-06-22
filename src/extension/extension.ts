@@ -27,8 +27,27 @@ type PreFlightProxyResponse = {
     content?: Array<{ text?: string }>;
 };
 
+type PreFlightExtensionConfig = {
+    licenseKey?: unknown;
+    freeFixesUsed?: unknown;
+};
+
+type ExtensionFixEntitlement = {
+    licenseKey: string;
+    isFree: boolean;
+};
+
+type ExtensionRemediationResult = {
+    patchedCode: string;
+    entitlement: ExtensionFixEntitlement;
+};
+
 const PREFLIGHT_PROXY_ENDPOINT = 'https://preflight-proxy.vercel.app/api/v1/remediation';
 const PREFLIGHT_DAEMON_MANIFEST = 'preflight-daemon.json';
+const FREE_FIX_LIMIT = 10;
+const FREE_FIX_PROXY_TOKEN = 'PREFLIGHT-FREE-FIX';
+const FREE_FIXES_EXHAUSTED_MESSAGE =
+    'You have used your 10 free AI/local fixes. To unlock unlimited deep reasoning remediation, upgrade to PreFlight Pro ($19/mo) at https://preflight-vibe.vercel.app/';
 const ALERT_POPUP_DEBOUNCE_MS = 250;
 const DAEMON_RECONNECT_MS = 750;
 const DAEMON_RECONNECT_LIMIT = 20;
@@ -44,26 +63,79 @@ function getConfigPath(): string {
     return path.join(homeDir, '.preflight', 'config.json');
 }
 
-async function resolveLicenseKey(): Promise<string> {
-    const envKey = (process.env.PREFLIGHT_PRO_KEY || process.env.PREFLIGHT_PRO_LICENSE_KEY || '').trim();
-    if (envKey) {
-        return envKey;
-    }
+function normalizeFreeFixesUsed(value: unknown): number {
+    return Number.isInteger(value) && typeof value === 'number' && value > 0 ? value : 0;
+}
 
+async function readExtensionConfig(): Promise<PreFlightExtensionConfig> {
     try {
         const rawConfig = await fs.readFile(getConfigPath(), 'utf8');
-        const parsed = JSON.parse(rawConfig) as { licenseKey?: unknown };
-        const storedKey = typeof parsed.licenseKey === 'string' ? parsed.licenseKey.trim() : '';
-        if (storedKey) {
-            return storedKey;
-        }
+        const parsed = JSON.parse(rawConfig) as PreFlightExtensionConfig;
+        return parsed && typeof parsed === 'object' ? parsed : {};
     } catch (error: any) {
-        if (error?.code !== 'ENOENT') {
-            throw error;
+        if (error?.code === 'ENOENT') {
+            return {};
         }
+
+        throw error;
+    }
+}
+
+async function writeExtensionConfig(config: PreFlightExtensionConfig): Promise<void> {
+    const configPath = getConfigPath();
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, {
+        encoding: 'utf8',
+        mode: 0o600
+    });
+    await fs.chmod(configPath, 0o600).catch(() => undefined);
+}
+
+async function resolveFixEntitlement(): Promise<ExtensionFixEntitlement> {
+    const envKey = (process.env.PREFLIGHT_PRO_KEY || process.env.PREFLIGHT_PRO_LICENSE_KEY || '').trim();
+    if (envKey) {
+        return { licenseKey: envKey, isFree: false };
     }
 
-    throw new Error("Auto-Patch requires a Pro license. Run 'preflight auth <your-key>' to activate.");
+    const config = await readExtensionConfig();
+    const storedKey = typeof config.licenseKey === 'string' ? config.licenseKey.trim() : '';
+    if (storedKey) {
+        return { licenseKey: storedKey, isFree: false };
+    }
+
+    const freeFixesUsed = normalizeFreeFixesUsed(config.freeFixesUsed);
+    if (freeFixesUsed >= FREE_FIX_LIMIT) {
+        throw new Error(FREE_FIXES_EXHAUSTED_MESSAGE);
+    }
+
+    return { licenseKey: FREE_FIX_PROXY_TOKEN, isFree: true };
+}
+
+async function recordFreeFixUsageIfNeeded(entitlement: ExtensionFixEntitlement): Promise<void> {
+    if (!entitlement.isFree) {
+        return;
+    }
+
+    const config = await readExtensionConfig();
+    const freeFixesUsed = normalizeFreeFixesUsed(config.freeFixesUsed);
+    await writeExtensionConfig({
+        ...config,
+        freeFixesUsed: freeFixesUsed + 1
+    });
+}
+
+function buildFixHeaders(entitlement: ExtensionFixEntitlement): Record<string, string> {
+    if (entitlement.isFree) {
+        return {
+            Authorization: `Bearer ${entitlement.licenseKey}`,
+            'X-PreFlight-Free-Fix': '1'
+        };
+    }
+
+    return {
+        Authorization: `Bearer ${entitlement.licenseKey}`,
+        'X-PreFlight-Pro-Key': entitlement.licenseKey
+    };
 }
 
 function firstTextBlock(response: PreFlightProxyResponse): string | null {
@@ -239,8 +311,8 @@ function hardenCommandInjectionPatch(originalCode: string, patchedCode: string):
     return nextCode;
 }
 
-async function requestPreFlightRemediation(alert: PreFlightAlertMessage, sourceCode: string): Promise<string> {
-    const licenseKey = await resolveLicenseKey();
+async function requestPreFlightRemediation(alert: PreFlightAlertMessage, sourceCode: string): Promise<ExtensionRemediationResult> {
+    const entitlement = await resolveFixEntitlement();
     const isCommandInjection = isCommandInjectionContext(alert, sourceCode);
     const vulnerabilityType = isCommandInjection ? 'COMMAND_INJECTION' : alert.issueType;
     const breakingPayload = (
@@ -254,8 +326,7 @@ async function requestPreFlightRemediation(alert: PreFlightAlertMessage, sourceC
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${licenseKey}`,
-            'X-PreFlight-Pro-Key': licenseKey
+            ...buildFixHeaders(entitlement)
         },
         body: JSON.stringify({
             filePath: alert.filePath,
@@ -272,7 +343,10 @@ async function requestPreFlightRemediation(alert: PreFlightAlertMessage, sourceC
     }
 
     const patchedCode = resolvePatchedCode(sourceCode, extractRemediationText(rawBody));
-    return isCommandInjection ? hardenCommandInjectionPatch(sourceCode, patchedCode) : patchedCode;
+    return {
+        patchedCode: isCommandInjection ? hardenCommandInjectionPatch(sourceCode, patchedCode) : patchedCode,
+        entitlement
+    };
 }
 
 function getPrimaryAlert(uri: vscode.Uri): PreFlightAlertMessage | undefined {
@@ -549,8 +623,9 @@ export function activate(context: vscode.ExtensionContext) {
 
                 const document = await vscode.workspace.openTextDocument(uri);
                 const sourceCode = document.getText();
-                const patchedCode = await requestPreFlightRemediation(alert, sourceCode);
-                await replaceDocument(document, patchedCode);
+                const remediation = await requestPreFlightRemediation(alert, sourceCode);
+                await replaceDocument(document, remediation.patchedCode);
+                await recordFreeFixUsageIfNeeded(remediation.entitlement);
                 diagnosticCollection.delete(uri);
                 diagnosticsByUri.delete(uri.toString());
                 diagnosticObjectsByUri.delete(uri.toString());

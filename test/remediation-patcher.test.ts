@@ -5,6 +5,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 const originalFetch = globalThis.fetch;
 const originalProKey = process.env.PREFLIGHT_PRO_KEY;
+const originalProLicenseKey = process.env.PREFLIGHT_PRO_LICENSE_KEY;
+const originalPreflightHome = process.env.PREFLIGHT_HOME;
 
 function makeTempFile(sourceCode: string): string {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-fuzzer-remediate-"));
@@ -13,10 +15,21 @@ function makeTempFile(sourceCode: string): string {
   return filePath;
 }
 
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+
+  process.env[name] = value;
+}
+
 describe("remediateFuzzerFinding", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
-    process.env.PREFLIGHT_PRO_KEY = originalProKey;
+    restoreEnv("PREFLIGHT_PRO_KEY", originalProKey);
+    restoreEnv("PREFLIGHT_PRO_LICENSE_KEY", originalProLicenseKey);
+    restoreEnv("PREFLIGHT_HOME", originalPreflightHome);
     vi.restoreAllMocks();
   });
 
@@ -53,6 +66,44 @@ describe("remediateFuzzerFinding", () => {
       executionTrail: ["req.query.userId", "db.query(sql)"]
     });
     expect(fs.readFileSync(filePath, "utf8")).toBe(patchedCode);
+  });
+
+  test("allows proxy remediation through the free 10-fix entitlement without a Pro key", async () => {
+    const { remediateFuzzerFinding } = await import("../src/remediation/patcher");
+    const filePath = makeTempFile("const sql = \"SELECT * FROM users WHERE id = \" + userId;\n");
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "preflight-free-fix-home-"));
+    const patchedCode = "const sql = { text: \"SELECT * FROM users WHERE id = $1\", values: [userId] };\n";
+    let requestHeaders: Record<string, string> = {};
+
+    delete process.env.PREFLIGHT_PRO_KEY;
+    delete process.env.PREFLIGHT_PRO_LICENSE_KEY;
+    process.env.PREFLIGHT_HOME = homeDir;
+    globalThis.fetch = vi.fn(async (_url, init) => {
+      requestHeaders = init?.headers as Record<string, string>;
+      return new Response(JSON.stringify({ code: patchedCode }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }) as any;
+
+    await expect(
+      remediateFuzzerFinding({
+        file: filePath,
+        type: "SQL_INJECTION",
+        severity: "HARD_BLOCK",
+        payload: "' OR '1'='1",
+        trail: ["req.query.userId", "db.query(sql)"]
+      })
+    ).resolves.toBe(true);
+
+    expect(requestHeaders).toMatchObject({
+      Authorization: "Bearer PREFLIGHT-FREE-FIX",
+      "X-PreFlight-Free-Fix": "1"
+    });
+    expect(requestHeaders).not.toHaveProperty("X-PreFlight-Pro-Key");
+    const config = JSON.parse(fs.readFileSync(path.join(homeDir, ".preflight", "config.json"), "utf8"));
+    expect(config.freeFixesUsed).toBe(1);
+    fs.rmSync(homeDir, { recursive: true, force: true });
   });
 
   test("applies a valid unified diff response", async () => {

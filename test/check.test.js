@@ -1352,7 +1352,7 @@ describe("PreFlight Check", () => {
     expect(fs.readFileSync(path.join(root, "dangerous-code.js"), "utf8")).toBe(contents);
   });
 
-  test("scan --fix halts after the local phase and prints the beta upgrade message when no PREFLIGHT_PRO_KEY exists for complex flaws", () => {
+  test("scan --fix allows Phase 2 during the 10 free fixes when no PREFLIGHT_PRO_KEY exists", () => {
     const contents = "const query = \"SELECT * FROM users WHERE id = \" + userId;\n";
     const root = makeProject({
       "lib/db.js": contents
@@ -1367,12 +1367,10 @@ describe("PreFlight Check", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("🔍 [PHASE 1] Running Offline Local AST Optimization Pass...");
+    expect(result.stdout).toContain("[PHASE 1] Running Offline Local AST Optimization Pass...");
     expect(result.stdout).toContain("[LOCAL] AST SQL fix available");
-    expect(result.stdout).toContain(
-      "⚠️ Advanced structural flaws detected. The free tier handles basic safety fixes. To unlock deep reasoning remediation and fix everything, join the invite-only beta at our website to get your PREFLIGHT_PRO_KEY."
-    );
-    expect(result.stdout).not.toContain("🚀 [PHASE 2] Handing Off Remaining Architectural Flaws");
+    expect(result.stdout).not.toContain("Advanced structural flaws detected.");
+    expect(result.stdout).toContain("[PHASE 2] Handing Off Remaining Architectural Flaws");
     expect(fs.readFileSync(path.join(root, "lib/db.js"), "utf8")).toBe(contents);
   });
 

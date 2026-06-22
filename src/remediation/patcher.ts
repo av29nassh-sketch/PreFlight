@@ -1,11 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveLicenseKey as resolveStoredOrEnvLicenseKey } from "../config/auth";
+import {
+  buildFixAuthHeaders,
+  recordFreeFixUsageIfNeeded,
+  resolveFixEntitlement
+} from "../config/fixEntitlement";
 
 const { parseSourceForValidation } = require("../../remediationEngine");
 
 const DEFAULT_REMEDIATION_ENDPOINT = "https://preflight-proxy.vercel.app/api/v1/remediation";
-export const MISSING_PRO_LICENSE_MESSAGE = "Auto-Patch requires a Pro license. Run 'preflight auth <your-key>' to activate.";
+export const MISSING_PRO_LICENSE_MESSAGE =
+  "You have used your 10 free AI/local fixes. To unlock unlimited deep reasoning remediation, upgrade to PreFlight Pro ($19/mo) at https://preflight-vibe.vercel.app/";
 
 export interface FuzzerRemediationFinding {
   file: string;
@@ -32,15 +37,6 @@ function resolveEndpoint(): string {
     process.env.PREFLIGHT_PROXY_ENDPOINT ||
     DEFAULT_REMEDIATION_ENDPOINT
   ).trim();
-}
-
-async function resolveLicenseKey(): Promise<string> {
-  const licenseKey = await resolveStoredOrEnvLicenseKey();
-  if (!licenseKey) {
-    throw new Error(MISSING_PRO_LICENSE_MESSAGE);
-  }
-
-  return licenseKey;
 }
 
 function firstTextBlock(response: RemediationResponseShape): string | null {
@@ -194,7 +190,7 @@ async function assertSyntaxSafe(filePath: string, patchedCode: string): Promise<
 export async function remediateFuzzerFinding(finding: FuzzerRemediationFinding): Promise<boolean> {
   const filePath = path.resolve(finding.file);
   const sourceCode = fs.readFileSync(filePath, "utf8");
-  const licenseKey = await resolveLicenseKey();
+  const entitlement = await resolveFixEntitlement(path.dirname(filePath));
   const requestBody = {
     filePath: finding.file,
     sourceCode,
@@ -207,8 +203,7 @@ export async function remediateFuzzerFinding(finding: FuzzerRemediationFinding):
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${licenseKey}`,
-      "X-PreFlight-Pro-Key": licenseKey
+      ...buildFixAuthHeaders(entitlement)
     },
     body: JSON.stringify(requestBody)
   });
@@ -222,5 +217,6 @@ export async function remediateFuzzerFinding(finding: FuzzerRemediationFinding):
   const patchedCode = resolvePatchedCode(sourceCode, remediationText);
   await assertSyntaxSafe(filePath, patchedCode);
   fs.writeFileSync(filePath, patchedCode);
+  await recordFreeFixUsageIfNeeded(entitlement);
   return true;
 }

@@ -394,6 +394,7 @@ describe("PreFlight core modular architecture", () => {
       PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260610-TEST1"
     })).toEqual({
       endpoint: "https://preflight-proxy.vercel.app/api/v1/remediation",
+      freeFix: false,
       licenseKey: "PREFLIGHT-BETA-20260610-TEST1",
       provider: "preflight-proxy",
       timeoutMs: 30000

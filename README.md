@@ -1,72 +1,109 @@
 # PreFlight
 
-## ⚡ Choose Your Remediation Depth
+Stop AI Coding Drift before it becomes production technical debt. PreFlight is a local-first safety gate for AI-generated code, built to catch unsafe auth, RLS, SQL, SSRF, command execution, dependency, and secret-handling changes before they get committed.
 
-PreFlight runs in two distinct tiers depending on what your codebase needs:
+## Choose Your Remediation Depth
 
-### 🟢 Free Tier (Local AST)
-- **What it does:** Scans and automatically fixes basic security and structural issues completely offline.
-- **Free fix allowance:** Includes **10 free auto-fix applications** before a `PREFLIGHT_PRO_KEY` is required for additional fix workflows. Local scanning remains completely free and unlimited.
-- **Setup:** Zero config. Works instantly out of the box.
+PreFlight runs in two distinct tiers depending on what your codebase needs.
+
+### Free Tier: PreFlight Guardian
+
+- **What it does:** Unlimited local scanning plus 10 free patch applications across local deterministic fixes and proxy-backed AI fixes.
+- **Setup:** Zero config for scanning. A Pro key is only required after the 10 free patches are used.
 - **Commands:**
-  ```bash
-  npm install -g preflight-pro
-  preflight scan . --fix
-  ```
+
+```bash
+npm install -g preflight-pro
+preflight init
+preflight scan . --fix
+```
 
 Installing `preflight-pro` exposes the universal `preflight` command in your shell.
 
-### 🚀 Pro Tier (Deep Reasoning)
-- **What it does:** Scans and automatically fixes everything—including complex multi-file architectural flaws, tenant isolation logic, and parametric SQL injections.
-- **Setup:** Requires an active `PREFLIGHT_PRO_KEY` environment variable.
-- **Commands:**
-  ```powershell
-  # PowerShell
-  $env:PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
-  preflight scan . --fix
-  ```
+### Pro Tier: PreFlight Pro
 
-  ```bash
-  # Bash / macOS
-  export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
-  preflight scan . --fix
-  ```
+- **What it does:** Unlimited scans and unlimited fixes, including deep reasoning remediation for complex multi-file architectural flaws, tenant isolation logic, and parametric SQL injections.
+- **Setup:** Requires an active `PREFLIGHT_PRO_KEY` or a saved key from `preflight auth`.
+- **PowerShell:**
 
-Stop AI Coding Drift before it becomes production technical debt. PreFlight is a local-first safety gate and deterministic orchestration engine designed to catch risky, hallucinated, or unverified AI-generated code snippets inside modern AI coding workflows.
+```powershell
+$env:PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
+preflight scan . --fix
+```
+
+- **Bash / macOS:**
+
+```bash
+export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
+preflight scan . --fix
+```
+
+## Installation Flow
+
+### Path A: CLI
+
+```bash
+npm install -g preflight-pro
+preflight init
+```
+
+Then scan any project:
+
+```bash
+preflight scan . --fix
+```
+
+### Path B: VS Code / Cursor
+
+1. Install the PreFlight Companion VSIX extension.
+2. Run the setup wizard once:
+
+```bash
+preflight init
+```
+
+3. Open your project in the IDE. The extension starts The Eye automatically, watches file saves, and surfaces PreFlight alerts in-editor.
 
 ## Pricing
 
-- Free Tier: Unlimited local AST scanning plus **10 free auto-fix applications** before a Pro key is required for more fix runs.
-- Solo Founder Tier: `$19/month`
-- Team Tier: `$49/seat/month`
+- **Free Tier:** Unlimited scans, 10 Free Patches (Local + Claude AI).
+- **Solo Pro:** $19/mo for unlimited scans and fixes.
+- **Teams:** $49/seat/mo for team rollout, shared onboarding, and unlimited scans and fixes.
 
-## **The Tri-State Risk Score Engine**
+## Engine Upgrades
 
-PreFlight parses your code down to an Abstract Syntax Tree (AST) using Tree-Sitter, passing ambiguous findings through deep reasoning layers to enforce explicit architectural contracts:
+PreFlight is now powered by deeper local analysis primitives:
 
-- 🔴 **Hard Block:** Exposed frontend secrets, leaking database service roles, or missing Supabase Row Level Security (RLS).
-- 🟡 **High-Risk Drift:** Structural state inconsistencies, un-idempotent webhooks, or open CORS contexts.
-- 🟢 **Likely Safe:** Standard algorithmic changes matching your pre-defined stack rules.
+- **Micro-Fuzzer:** Generates focused security payloads for risky data-flow paths, such as SQL injection, command injection, auth bypass, SSRF, and path traversal.
+- **Quantized CPG (Code Property Graph):** Builds a compact in-memory graph of syntax, control flow, and data flow so PreFlight can trace untrusted input into dangerous sinks instead of relying on brittle string matching.
+
+## The Tri-State Risk Score Engine
+
+PreFlight parses your code down to an Abstract Syntax Tree (AST) using Tree-Sitter, then classifies risk into three states:
+
+- **Hard Block:** Exposed frontend secrets, leaking database service roles, command execution, SQL injection, or missing Supabase Row Level Security (RLS).
+- **High-Risk Drift:** Structural state inconsistencies, un-idempotent webhooks, weak validation, or open CORS contexts.
+- **Likely Safe:** Standard local edits matching your expected stack rules.
 
 ## 2-Phase Pipeline
 
-PreFlight Pro runs as a strict 2-phase remediation pipeline:
+PreFlight runs fixes in a strict sequence:
 
-1. Phase 1: Offline Local AST Sweep
-   PreFlight completes an ultra-fast offline structural pass first and applies any local-only fixes it can resolve without calling the cloud reasoning layer.
-2. Phase 2: PreFlight Pro Deep Reasoning Handoff
-   Only the remaining SQL and complex architectural flaws are handed off through the secure proxy-backed Pro Engine reasoning path for premium remediation suggestions.
+1. **Phase 1: Offline Local AST Sweep**
+   PreFlight completes an ultra-fast offline structural pass first and applies any deterministic local fixes it can resolve safely.
+2. **Phase 2: PreFlight Pro Deep Reasoning Handoff**
+   Remaining SQL, fuzzer, and complex architectural flaws are handed off through the secure proxy-backed reasoning path when a patch requires deeper context.
+
+The first 10 patch applications are free across both phases. After that, a `PREFLIGHT_PRO_KEY` is required.
 
 ## Editor & MCP Usage
 
-PreFlight can run directly in the terminal or as an MCP server for AI-native editors.
-
-Free tier note: `scan_project` remains free and unlimited. `preflight_fix` can successfully apply up to **10 free fixes total** before a `PREFLIGHT_PRO_KEY` is required.
+PreFlight can run directly in the terminal, through the VS Code/Cursor extension, or as an MCP server for AI-native editors.
 
 Start the MCP server locally:
 
 ```bash
-node index.js mcp
+preflight mcp
 ```
 
 Available MCP tools include:
@@ -74,6 +111,8 @@ Available MCP tools include:
 - `scan_project`
 - `preflight_fix`
 - `audit_dependencies`
+
+`scan_project` remains free and unlimited. `preflight_fix` shares the global 10-patch free allowance before a `PREFLIGHT_PRO_KEY` is required.
 
 ## Post-Fix Verification Loop
 

@@ -6,7 +6,7 @@ const roots = [];
 const ACTIVATION_MESSAGE = "\u2705 PreFlight Pro activated successfully! Unlimited AI auto-fixes unlocked.";
 const EMAIL_MISMATCH_MESSAGE = "\u274c Email does not match the purchase record.";
 const EXHAUSTED_MESSAGE =
-  "\u26a0\ufe0f Free fixes exhausted (10/10). Upgrade to PreFlight Pro for unlimited AI auto-fixes for a one-time payment of $49 / \u20b91999: https://yourwebsite.com/buy";
+  "You have used your 10 free AI/local fixes. To unlock unlimited deep reasoning remediation, upgrade to PreFlight Pro ($19/mo) at https://preflight-vibe.vercel.app/";
 const BETA_ACTIVE_RECEIPT =
   "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes (Expires 14 days from issue date).";
 const ORG_ACCOUNT_MESSAGE =

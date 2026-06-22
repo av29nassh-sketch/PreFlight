@@ -1,7 +1,12 @@
 import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveLicenseKey as resolveStoredOrEnvLicenseKey } from "../config/auth";
+import {
+  buildFixAuthHeaders,
+  recordFreeFixUsageIfNeeded,
+  resolveFixEntitlement,
+  type FixEntitlement
+} from "../config/fixEntitlement";
 
 const PREFLIGHT_PROXY_REMEDIATION_ENDPOINT = "https://preflight-proxy.vercel.app/api/v1/remediation";
 
@@ -156,13 +161,12 @@ function inferBreakingPayload(unresolvedIssues: string[]): string {
   return unresolvedIssues.find((issue) => issue.trim()) || "__PREFLIGHT_FAST_CHECK__";
 }
 
-async function runProxyPatch(filePath: string, currentContent: string, unresolvedIssues: string[]): Promise<string> {
-  const proKey = await resolveStoredOrEnvLicenseKey();
-
-  if (!proKey) {
-    throw new Error("Auto-Patch failed: PREFLIGHT_PRO_KEY is required for complex PreFlight Pro fixes.");
-  }
-
+async function runProxyPatch(
+  filePath: string,
+  currentContent: string,
+  unresolvedIssues: string[],
+  entitlement: FixEntitlement
+): Promise<string> {
   const requestBody = {
     filePath,
     sourceCode: currentContent,
@@ -180,8 +184,7 @@ async function runProxyPatch(filePath: string, currentContent: string, unresolve
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${proKey}`,
-      "X-PreFlight-Pro-Key": proKey
+      ...buildFixAuthHeaders(entitlement)
     },
     body: JSON.stringify(requestBody)
   });
@@ -208,11 +211,15 @@ async function runProxyPatch(filePath: string, currentContent: string, unresolve
 }
 
 export async function applyAutoPatch(filePath: string, issues: string[]): Promise<boolean> {
+  const entitlement = await resolveFixEntitlement(path.dirname(path.resolve(filePath)));
+
   if (applyDeterministicConfigSecretPatch(filePath, issues)) {
+    await recordFreeFixUsageIfNeeded(entitlement);
     return true;
   }
 
   if (applyDeterministicPackageJsonPatch(filePath, issues)) {
+    await recordFreeFixUsageIfNeeded(entitlement);
     return true;
   }
 
@@ -231,9 +238,10 @@ export async function applyAutoPatch(filePath: string, issues: string[]): Promis
   }
 
   if (unresolvedIssues.length > 0) {
-    currentContent = await runProxyPatch(filePath, currentContent, unresolvedIssues);
+    currentContent = await runProxyPatch(filePath, currentContent, unresolvedIssues, entitlement);
   }
 
   fs.writeFileSync(filePath, currentContent.endsWith("\n") ? currentContent : `${currentContent}\n`, "utf8");
+  await recordFreeFixUsageIfNeeded(entitlement);
   return true;
 }

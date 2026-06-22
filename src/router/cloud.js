@@ -34,6 +34,7 @@ const PAYWALL_UPGRADE_MESSAGE = [
 ].join("\n");
 const PRO_ENGINE_CONNECTION_ERROR =
   "🔴 PreFlight Pro Engine connection timed out or license invalid. Please verify your PREFLIGHT_PRO_KEY.";
+const FREE_FIX_PROXY_TOKEN = "PREFLIGHT-FREE-FIX";
 const MANUAL_REVIEW_MESSAGE =
   "⚠️ Manual Review Recommended: This vulnerability requires specific architectural context to fix safely. PreFlight has skipped auto-remediation to protect your build logic.";
 
@@ -248,6 +249,28 @@ function assertLicenseKey(licenseKey) {
   return licenseKey.trim();
 }
 
+function resolveProxyLicenseKey(env = process.env, options = {}) {
+  const configuredKey = options.licenseKey || env.PREFLIGHT_PRO_KEY || env.PREFLIGHT_PRO_LICENSE_KEY;
+  if (configuredKey) {
+    return {
+      licenseKey: assertLicenseKey(configuredKey),
+      freeFix: false
+    };
+  }
+
+  if (options.allowFreeProxy === true || options.freeFix === true) {
+    return {
+      licenseKey: FREE_FIX_PROXY_TOKEN,
+      freeFix: true
+    };
+  }
+
+  return {
+    licenseKey: assertLicenseKey(configuredKey),
+    freeFix: false
+  };
+}
+
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -436,9 +459,11 @@ function validateCloudVerdict(verdict) {
 }
 
 function resolveCloudProvider(env = process.env, options = {}) {
+  const resolvedAuth = resolveProxyLicenseKey(env, options);
   return {
     endpoint: options.endpoint || env.PREFLIGHT_CLOUD_ENDPOINT || DEFAULT_CLOUD_ENDPOINT,
-    licenseKey: assertLicenseKey(options.licenseKey || env.PREFLIGHT_PRO_KEY || env.PREFLIGHT_PRO_LICENSE_KEY),
+    licenseKey: resolvedAuth.licenseKey,
+    freeFix: resolvedAuth.freeFix,
     provider: "preflight-proxy"
   };
 }
@@ -482,9 +507,11 @@ function createMicroRouterClient(provider, options = {}) {
 function resolveReasoningEngineProvider(env = process.env, options = {}) {
   const timeoutMs = Number(options.timeoutMs || env.PREFLIGHT_REASONING_TIMEOUT_MS);
   const resolvedTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_REASONING_TIMEOUT_MS;
+  const resolvedAuth = resolveProxyLicenseKey(env, options);
   return {
     endpoint: options.endpoint || env.PREFLIGHT_CLOUD_ENDPOINT || DEFAULT_CLOUD_ENDPOINT,
-    licenseKey: assertLicenseKey(options.licenseKey || env.PREFLIGHT_PRO_KEY || env.PREFLIGHT_PRO_LICENSE_KEY),
+    licenseKey: resolvedAuth.licenseKey,
+    freeFix: resolvedAuth.freeFix,
     provider: "preflight-proxy",
     timeoutMs: resolvedTimeout
   };
@@ -568,6 +595,7 @@ class ReasoningEngine {
         endpoint: options.endpoint || this.provider.endpoint,
         files: context.files || [],
         licenseKey: options.licenseKey || this.provider.licenseKey,
+        freeFix: options.freeFix === true || this.provider.freeFix === true,
         maxContextBytes: options.maxContextBytes || this.maxContextBytes,
         mode: "auto-heal",
         timeoutMs: options.timeoutMs || this.provider.timeoutMs,
@@ -622,6 +650,7 @@ async function callCloudDiffAnalyzer(diff, options = {}) {
       endpoint: options.endpoint || provider.endpoint,
       files: options.files || [],
       licenseKey: options.licenseKey || provider.licenseKey,
+      freeFix: options.freeFix === true || provider.freeFix === true,
       mode: options.mode || "manual-qa",
       timeoutMs: options.timeoutMs,
       transport: options.transport
@@ -656,7 +685,8 @@ async function analyzeDiffWithCloud(diff, options = {}) {
 }
 
 function prepareCloudFallback(diff, options = {}) {
-  const licenseKey = assertLicenseKey(options.licenseKey || process.env.PREFLIGHT_PRO_KEY || process.env.PREFLIGHT_PRO_LICENSE_KEY);
+  const resolvedAuth = resolveProxyLicenseKey(process.env, options);
+  const licenseKey = resolvedAuth.licenseKey;
   const endpoint = options.endpoint || process.env.PREFLIGHT_CLOUD_ENDPOINT || DEFAULT_CLOUD_ENDPOINT;
   const payload = buildCloudPayload(diff, options);
 
@@ -664,7 +694,7 @@ function prepareCloudFallback(diff, options = {}) {
     endpoint,
     headers: {
       Authorization: `Bearer ${licenseKey}`,
-      "X-PreFlight-Pro-Key": licenseKey,
+      ...(resolvedAuth.freeFix ? { "X-PreFlight-Free-Fix": "1" } : { "X-PreFlight-Pro-Key": licenseKey }),
       "Content-Type": "application/json",
       "X-PreFlight-Diff-SHA256": payload.diffSha256
     },
@@ -761,6 +791,7 @@ async function requestCloudScan(diff, options = {}) {
     const response = await requestPreflightProxy({
       endpoint: request.endpoint,
       licenseKey: options.licenseKey || extractPreflightProxyLicenseKey(request.headers),
+      freeFix: options.freeFix === true || request.headers["X-PreFlight-Free-Fix"] === "1",
       system: requestedAction === "auto-heal"
         ? REASONING_ENGINE_SYSTEM_PROMPT
         : PREFLIGHT_SYSTEM_PROMPT,
