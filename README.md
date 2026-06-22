@@ -40,6 +40,8 @@ preflight scan . --fix
 
 ## Installation Flow
 
+PreFlight supports both a terminal-first workflow and an IDE-first workflow. Both paths end with `preflight init`, because that wizard connects your editor, MCP clients, and Pro/Beta key in one place.
+
 ### Path A: CLI
 
 ```bash
@@ -47,7 +49,7 @@ npm install -g preflight-pro
 preflight init
 ```
 
-Then scan any project:
+Then scan any project from its root:
 
 ```bash
 preflight scan . --fix
@@ -55,14 +57,44 @@ preflight scan . --fix
 
 ### Path B: VS Code / Cursor
 
-1. Install the PreFlight Companion VSIX extension.
-2. Run the setup wizard once:
+1. Install the global CLI command:
+
+```bash
+npm install -g preflight-pro
+```
+
+2. Download and install the PreFlight Companion VSIX extension:
+
+- [Download VSIX from the PreFlight website](https://preflight-vibe.vercel.app/downloads/preflight-companion-0.0.1.vsix)
+- Or open [GitHub Releases](https://github.com/av29nassh-sketch/PreFlight/releases) and install the latest `preflight-companion` VSIX.
+
+3. Run the setup wizard once:
 
 ```bash
 preflight init
 ```
 
-3. Open your project in the IDE. The extension starts The Eye automatically, watches file saves, and surfaces PreFlight alerts in-editor.
+4. Open your project in the IDE. The extension starts The Eye automatically, watches file saves, and surfaces PreFlight alerts in-editor.
+
+### Beta / Pro Keys
+
+Free users get unlimited scans and 10 total patches across local fixes and proxy-backed AI fixes. After the 10 free patches are used, unlimited fixes require a Pro/Beta key.
+
+You can add your key during `preflight init`, or activate it directly:
+
+```bash
+preflight auth PREFLIGHT-BETA-XXXXX
+```
+
+For one terminal session, you can also set it manually:
+
+```powershell
+$env:PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
+```
+
+```bash
+export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
+```
 
 ## Pricing
 
