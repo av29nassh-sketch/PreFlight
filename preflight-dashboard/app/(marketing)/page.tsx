@@ -28,8 +28,8 @@ const pricingPlans = [
     description: "Start with the local-first safety gate and enough free remediation to prove the workflow.",
     features: [
       "Unlimited local AST scanning",
-      "IDE daemon and save-time alerts",
-      "MCP integration",
+      "The Eye daemon and save-time IDE alerts",
+      "MCP integration for AI-native editors",
       "10 Free Deep-Reasoning AI Fixes"
     ],
     cta: "Install PreFlight",
@@ -120,7 +120,7 @@ function TerminalBlock() {
         ))}
       </div>
       <div className="border-t border-white/10 px-6 py-4 text-sm text-zinc-400">
-        Also available as a native VS Code Extension.
+        Also available as a native VS Code Extension. The Eye daemon watches saves; MCP support connects AI-native editors.
       </div>
     </div>
   );
@@ -139,7 +139,7 @@ function SetupPaths() {
             Two ways in. Both end with <span className="text-cyan-200">preflight init</span>.
           </h2>
           <p className="mt-4 text-base leading-7 text-zinc-400">
-            Install the global CLI once so the daemon, MCP server, and extension can all call the same <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-zinc-200">preflight</code> command. Then run <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-zinc-200">preflight init</code> to connect your editor, MCP clients, and beta key.
+            Install the global CLI once so The Eye daemon, MCP server, and extension can all call the same <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-zinc-200">preflight</code> command. Then run <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-zinc-200">preflight init</code> to connect your editor, MCP clients, and beta key.
           </p>
           <div className="mt-4 rounded-2xl border border-white/10 bg-black/35 p-4 text-sm leading-6 text-zinc-300">
             <span className="font-semibold text-white">VSIX beta note:</span> the extension is the IDE surface. The global CLI is still required because it starts The Eye daemon, MCP server, and fix engine behind the scenes.
@@ -241,11 +241,12 @@ export default function MarketingPage() {
             </a>
           </div>
 
-          <div className="mt-10 grid max-w-3xl gap-3 sm:grid-cols-3">
+          <div className="mt-10 grid max-w-4xl gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {[
               ["Micro-Fuzzer", "Payloads risky flows"],
               ["Quantized CPG", "Tracks source to sink"],
-              ["Local-first", "Scans before upload"]
+              ["The Eye", "Watches saves locally"],
+              ["MCP-ready", "Connects AI editors"]
             ].map(([title, copy]) => (
               <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4" key={title}>
                 <div className="text-sm font-semibold text-white">{title}</div>

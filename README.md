@@ -2,6 +2,8 @@
 
 Stop AI Coding Drift before it becomes production technical debt. PreFlight is a local-first safety gate for AI-generated code, built to catch unsafe auth, RLS, SQL, SSRF, command execution, dependency, and secret-handling changes before they get committed.
 
+Website: [https://preflight-vibe.vercel.app](https://preflight-vibe.vercel.app)
+
 ## Choose Your Remediation Depth
 
 PreFlight runs in two distinct tiers depending on what your codebase needs.
@@ -77,6 +79,11 @@ preflight init
 
 4. Open your project in the IDE. The extension starts The Eye automatically, watches file saves, and surfaces PreFlight alerts in-editor.
 
+### The Eye and MCP
+
+- **The Eye:** The VS Code/Cursor extension starts PreFlight's local daemon automatically. It watches file saves and raises in-editor alerts when AI-generated code introduces a hard-block issue.
+- **MCP bridge:** `preflight init` can also wire `preflight mcp` into supported AI editors so agents can call PreFlight tools without leaving the coding flow.
+
 ### Beta / Pro Keys
 
 Free users get unlimited scans and 10 total patches across local fixes and proxy-backed AI fixes. After the 10 free patches are used, unlimited fixes require a Pro/Beta key.
@@ -109,6 +116,7 @@ PreFlight is now powered by deeper local analysis primitives:
 
 - **Micro-Fuzzer:** Generates focused security payloads for risky data-flow paths, such as SQL injection, command injection, auth bypass, SSRF, and path traversal.
 - **Quantized CPG (Code Property Graph):** Builds a compact in-memory graph of syntax, control flow, and data flow so PreFlight can trace untrusted input into dangerous sinks instead of relying on brittle string matching.
+- **The Eye daemon:** Runs locally through the CLI/extension workflow and watches file saves so issues appear while the AI coding session is still active.
 
 ## Tri-State Risk Score Engine
 
