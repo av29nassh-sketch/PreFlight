@@ -9,6 +9,81 @@ const auditRequestSchema = z.object({
   email: z.string().trim().email().max(320)
 });
 
+const auditTypeLabels = {
+  github: "GitHub Repo URL",
+  website: "Live Website URL",
+  code: "Pasted Code Block"
+} as const;
+
+function formatAuditTargetForDiscord(inputType: keyof typeof auditTypeLabels, target: string) {
+  if (inputType === "code") {
+    return `Code block submitted (${target.length.toLocaleString()} characters). Stored in AuditRequest.`;
+  }
+
+  return target.length > 1000 ? `${target.slice(0, 997)}...` : target;
+}
+
+async function notifyDiscordAuditRequest({
+  id,
+  inputType,
+  target,
+  email
+}: {
+  id: string;
+  inputType: keyof typeof auditTypeLabels;
+  target: string;
+  email: string;
+}) {
+  const webhookUrl = process.env.AUDIT_WEBHOOK_URL?.trim();
+  if (!webhookUrl) {
+    return false;
+  }
+
+  const response = await fetch(webhookUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      embeds: [
+        {
+          title: "New PreFlight Audit Request",
+          color: 3447003,
+          fields: [
+            {
+              name: "Type",
+              value: auditTypeLabels[inputType],
+              inline: true
+            },
+            {
+              name: "Email",
+              value: email,
+              inline: true
+            },
+            {
+              name: "Audit ID",
+              value: id,
+              inline: false
+            },
+            {
+              name: "Target",
+              value: formatAuditTargetForDiscord(inputType, target),
+              inline: false
+            }
+          ],
+          timestamp: new Date().toISOString()
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Discord webhook failed with status ${response.status}`);
+  }
+
+  return true;
+}
+
 async function ensureAuditRequestTable() {
   await prisma.$executeRaw`
     CREATE TABLE IF NOT EXISTS "AuditRequest" (
@@ -41,10 +116,27 @@ export async function POST(request: NextRequest) {
 
   await ensureAuditRequestTable();
 
+  const auditId = randomUUID();
+
   await prisma.$executeRaw`
     INSERT INTO "AuditRequest" ("id", "inputType", "target", "email")
-    VALUES (${randomUUID()}, ${parsed.data.inputType}, ${parsed.data.target}, ${parsed.data.email})
+    VALUES (${auditId}, ${parsed.data.inputType}, ${parsed.data.target}, ${parsed.data.email})
   `;
 
-  return NextResponse.json({ ok: true });
+  let notificationSent = false;
+  try {
+    notificationSent = await notifyDiscordAuditRequest({
+      id: auditId,
+      inputType: parsed.data.inputType,
+      target: parsed.data.target,
+      email: parsed.data.email
+    });
+  } catch (error) {
+    console.error("Audit request Discord notification failed", {
+      auditId,
+      error: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+
+  return NextResponse.json({ ok: true, notificationSent });
 }
