@@ -1,13 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
-import { prisma } from "../../../../lib/prisma";
+import { Pool } from "pg";
 
 const auditRequestSchema = z.object({
   inputType: z.enum(["github", "website", "code"]),
   target: z.string().trim().min(8).max(12000),
   email: z.string().trim().email().max(320)
 });
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __preflightAuditPool: Pool | undefined;
+}
+
+function getAuditPool() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("DATABASE_URL is not configured.");
+  }
+
+  if (!globalThis.__preflightAuditPool) {
+    globalThis.__preflightAuditPool = new Pool({
+      connectionString,
+      ssl: connectionString.includes("localhost") ? undefined : { rejectUnauthorized: false }
+    });
+  }
+
+  return globalThis.__preflightAuditPool;
+}
 
 const auditTypeLabels = {
   github: "GitHub Repo URL",
@@ -84,6 +105,19 @@ async function notifyDiscordAuditRequest({
   return true;
 }
 
+async function ensureAuditRequestTable() {
+  await getAuditPool().query(`
+    CREATE TABLE IF NOT EXISTS "AuditRequest" (
+      "id" TEXT PRIMARY KEY,
+      "inputType" TEXT NOT NULL,
+      "target" TEXT NOT NULL,
+      "email" TEXT NOT NULL,
+      "status" TEXT NOT NULL DEFAULT 'new',
+      "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
 export async function POST(request: NextRequest) {
   let body: unknown;
 
@@ -104,10 +138,15 @@ export async function POST(request: NextRequest) {
   const auditId = randomUUID();
 
   try {
-    await prisma.$executeRaw`
+    await ensureAuditRequestTable();
+
+    await getAuditPool().query(
+      `
       INSERT INTO "AuditRequest" ("id", "inputType", "target", "email")
-      VALUES (${auditId}, ${parsed.data.inputType}, ${parsed.data.target}, ${parsed.data.email})
-    `;
+      VALUES ($1, $2, $3, $4)
+      `,
+      [auditId, parsed.data.inputType, parsed.data.target, parsed.data.email]
+    );
   } catch (error) {
     console.error("Audit request database insert failed", {
       auditId,
