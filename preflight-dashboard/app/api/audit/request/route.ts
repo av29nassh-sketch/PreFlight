@@ -52,6 +52,14 @@ function formatAuditTargetForTelegram(inputType: keyof typeof auditTypeLabels, t
   return target.length > 2500 ? `${target.slice(0, 2497)}...` : target;
 }
 
+function formatAuditTargetForEmail(inputType: keyof typeof auditTypeLabels, target: string) {
+  if (inputType === "code") {
+    return `Code block submitted (${target.length.toLocaleString()} characters). Stored in AuditRequest.`;
+  }
+
+  return target;
+}
+
 async function notifyDiscordAuditRequest({
   id,
   inputType,
@@ -116,6 +124,56 @@ async function notifyDiscordAuditRequest({
 
   if (!response.ok) {
     throw new Error(`Discord webhook failed with status ${response.status}`);
+  }
+
+  return true;
+}
+
+async function notifyEmailAuditRequest({
+  id,
+  inputType,
+  target,
+  email
+}: {
+  id: string;
+  inputType: keyof typeof auditTypeLabels;
+  target: string;
+  email: string;
+}) {
+  const resendApiKey = process.env.RESEND_API_KEY?.trim();
+  const notificationEmail = process.env.AUDIT_NOTIFICATION_EMAIL?.trim();
+  const fromEmail = process.env.AUDIT_EMAIL_FROM?.trim() || "PreFlight <onboarding@resend.dev>";
+  if (!resendApiKey || !notificationEmail) {
+    return false;
+  }
+
+  const lines = [
+    "New PreFlight Audit Request",
+    "",
+    `Type: ${auditTypeLabels[inputType]}`,
+    `Submitted email: ${email}`,
+    `Audit ID: ${id}`,
+    "",
+    "Target:",
+    formatAuditTargetForEmail(inputType, target)
+  ];
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${resendApiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: fromEmail,
+      to: [notificationEmail],
+      subject: `New PreFlight audit request: ${auditTypeLabels[inputType]}`,
+      text: lines.join("\n")
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Email notification failed with status ${response.status}`);
   }
 
   return true;
@@ -251,10 +309,26 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  let emailNotificationSent = false;
+  try {
+    emailNotificationSent = await notifyEmailAuditRequest({
+      id: auditId,
+      inputType: parsed.data.inputType,
+      target: parsed.data.target,
+      email: parsed.data.email
+    });
+  } catch (error) {
+    console.error("Audit request email notification failed", {
+      auditId,
+      error: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+
   return NextResponse.json({
     ok: true,
-    notificationSent: discordNotificationSent || telegramNotificationSent,
+    notificationSent: discordNotificationSent || telegramNotificationSent || emailNotificationSent,
     discordNotificationSent,
-    telegramNotificationSent
+    telegramNotificationSent,
+    emailNotificationSent
   });
 }
