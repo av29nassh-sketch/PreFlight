@@ -57,7 +57,7 @@ preflight scan . --fix
 
 ### Path B: VS Code / Cursor
 
-1. Install the global CLI command:
+1. Install the global CLI command. The VSIX gives you the in-editor UI, but the extension still uses the global `preflight` command to start The Eye daemon and run fixes.
 
 ```bash
 npm install -g preflight-pro
@@ -67,6 +67,7 @@ npm install -g preflight-pro
 
 - [Download VSIX from the PreFlight website](https://preflight-vibe.vercel.app/downloads/preflight-companion-0.0.1.vsix)
 - Or open [GitHub Releases](https://github.com/av29nassh-sketch/PreFlight/releases) and install the latest `preflight-companion` VSIX.
+- In VS Code or Cursor, open the Extensions panel, click the `...` menu, choose `Install from VSIX...`, and select the downloaded file.
 
 3. Run the setup wizard once:
 
@@ -98,7 +99,7 @@ export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
 
 ## Pricing
 
-- **Free Tier:** Unlimited scans, 10 Free Patches (Local + Claude AI).
+- **Free Tier:** Unlimited scans, 10 Free Patches (Local + Deep-Reasoning AI).
 - **Solo Pro:** $19/mo for unlimited scans and fixes.
 - **Teams:** $49/seat/mo for team rollout, shared onboarding, and unlimited scans and fixes.
 

@@ -64,6 +64,7 @@ recordings/
 *.jpeg
 *.gif
 *.webp
+!public/preflight-notification.png
 *.mp4
 *.mov
 *.avi

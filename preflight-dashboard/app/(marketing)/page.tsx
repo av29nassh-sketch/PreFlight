@@ -3,16 +3,12 @@ import {
   Check,
   Code2,
   Cpu,
-  FileCode2,
-  GitBranch,
-  Globe2,
   LockKeyhole,
-  Mail,
   Network,
-  ScanLine,
   ShieldCheck,
   Terminal
 } from "lucide-react";
+import { AuditRequestCard } from "../../components/audit-request-card";
 
 export const dynamic = "force-dynamic";
 
@@ -22,21 +18,6 @@ const vsixDownloadUrl = "/downloads/preflight-companion-0.0.1.vsix";
 const terminalLines = [
   "npm install -g preflight-pro",
   "preflight init"
-];
-
-const auditTypes = [
-  {
-    label: "GitHub Repo URL",
-    icon: GitBranch
-  },
-  {
-    label: "Live Website URL",
-    icon: Globe2
-  },
-  {
-    label: "Paste Code Block",
-    icon: FileCode2
-  }
 ];
 
 const pricingPlans = [
@@ -107,7 +88,8 @@ const setupPaths = [
     href: vsixDownloadUrl,
     steps: [
       "npm install -g preflight-pro",
-      "Download and install the VSIX extension",
+      "Download the VSIX extension",
+      "Extensions > ... > Install from VSIX",
       "preflight init",
       "Open your project and save a file"
     ]
@@ -144,87 +126,6 @@ function TerminalBlock() {
   );
 }
 
-function AuditBox() {
-  return (
-    <section className="relative z-10 mx-auto -mt-8 max-w-5xl px-6 pb-20">
-      <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-white/[0.045] p-6 shadow-[0_30px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl md:p-8">
-        <div className="absolute left-1/2 top-0 h-px w-2/3 -translate-x-1/2 bg-gradient-to-r from-transparent via-cyan-300/70 to-transparent" />
-        <div className="absolute -right-24 -top-24 h-56 w-56 rounded-full bg-cyan-400/10 blur-3xl" />
-        <div className="absolute -bottom-28 -left-24 h-64 w-64 rounded-full bg-red-500/10 blur-3xl" />
-
-        <div className="relative">
-          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-            <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200">
-                <ScanLine className="h-3.5 w-3.5" />
-                manual review
-              </div>
-              <h2 className="mt-4 text-3xl font-semibold tracking-tight text-white md:text-4xl">
-                Get a Free Manual Code Audit
-              </h2>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400 md:text-base">
-                Send a repo, live URL, or suspicious code block. We will review the highest-risk AI coding drift paths and email the report.
-              </p>
-            </div>
-            <div className="rounded-full border border-emerald-300/25 bg-emerald-300/10 px-4 py-2 text-sm text-emerald-100">
-              Free, human-reviewed first pass
-            </div>
-          </div>
-
-          <form className="mt-8 grid gap-4">
-            <div className="grid gap-3 md:grid-cols-3">
-              {auditTypes.map(({ label, icon: Icon }) => (
-                <label
-                  className="flex cursor-pointer items-center gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-sm font-medium text-zinc-200 transition hover:border-cyan-300/40 hover:bg-cyan-300/5"
-                  key={label}
-                >
-                  <input className="h-4 w-4 accent-cyan-300" name="audit-type" type="radio" defaultChecked={label === "GitHub Repo URL"} />
-                  <Icon className="h-4 w-4 text-cyan-200" />
-                  {label}
-                </label>
-              ))}
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-[1fr_0.62fr]">
-              <label className="grid gap-2">
-                <span className="text-sm font-medium text-zinc-300">URL or code</span>
-                <textarea
-                  className="min-h-32 resize-y rounded-2xl border border-white/10 bg-black/40 px-4 py-3 font-mono text-sm text-zinc-100 outline-none ring-0 transition placeholder:text-zinc-600 focus:border-cyan-300/60"
-                  placeholder="https://github.com/your-org/your-repo or paste a risky route.ts block..."
-                />
-              </label>
-
-              <div className="grid gap-4">
-                <label className="grid gap-2">
-                  <span className="text-sm font-medium text-zinc-300">Your Email Address</span>
-                  <div className="relative">
-                    <Mail className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
-                    <input
-                      className="h-12 w-full rounded-2xl border border-white/10 bg-black/40 pl-11 pr-4 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-cyan-300/60"
-                      placeholder="you@company.com"
-                      required
-                      type="email"
-                    />
-                  </div>
-                </label>
-                <button className="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-cyan-200 px-5 text-sm font-bold text-zinc-950 transition hover:bg-white active:translate-y-px">
-                  Run Free Security Audit
-                  <ArrowRight className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          </form>
-
-          <a className="mt-5 inline-flex items-center gap-2 text-sm font-medium text-zinc-400 transition hover:text-cyan-200" href={waitlistUrl}>
-            Want unlimited automated fixes? Join the Pro Beta Waitlist
-            <ArrowRight className="h-4 w-4" />
-          </a>
-        </div>
-      </div>
-    </section>
-  );
-}
-
 function SetupPaths() {
   return (
     <section className="relative z-10 mx-auto max-w-7xl px-6 pb-20">
@@ -240,6 +141,9 @@ function SetupPaths() {
           <p className="mt-4 text-base leading-7 text-zinc-400">
             Install the global CLI once so the daemon, MCP server, and extension can all call the same <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-zinc-200">preflight</code> command. Then run <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-zinc-200">preflight init</code> to connect your editor, MCP clients, and beta key.
           </p>
+          <div className="mt-4 rounded-2xl border border-white/10 bg-black/35 p-4 text-sm leading-6 text-zinc-300">
+            <span className="font-semibold text-white">VSIX beta note:</span> the extension is the IDE surface. The global CLI is still required because it starts The Eye daemon, MCP server, and fix engine behind the scenes.
+          </div>
           <div className="mt-6 rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.07] p-4 text-sm leading-6 text-cyan-100">
             <span className="font-semibold text-cyan-200">Beta / Pro keys:</span> Free includes unlimited scans and 10 total patches. After that, paste your issued key during <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-cyan-50">preflight init</code> or run <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-cyan-50">preflight auth YOUR_KEY</code> to unlock unlimited fixes.
           </div>
@@ -281,8 +185,12 @@ export default function MarketingPage() {
       <header className="relative z-10 border-b border-white/10">
         <nav className="mx-auto flex max-w-7xl items-center justify-between px-6 py-5">
           <a className="flex items-center gap-3" href="/">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-cyan-300/30 bg-cyan-300/10">
-              <ShieldCheck className="h-5 w-5 text-cyan-200" />
+            <span className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl border border-cyan-300/30 bg-black shadow-[0_0_24px_rgba(34,211,238,0.18)]">
+              <img
+                alt="PreFlight"
+                className="h-8 w-8 object-contain"
+                src="/preflight-notification.png"
+              />
             </span>
             <span className="font-mono text-sm font-semibold uppercase tracking-[0.22em] text-zinc-100">
               PreFlight
@@ -350,11 +258,11 @@ export default function MarketingPage() {
         <TerminalBlock />
       </section>
 
-      <SetupPaths />
-
       <div id="audit">
-        <AuditBox />
+        <AuditRequestCard />
       </div>
+
+      <SetupPaths />
 
       <section className="relative z-10 mx-auto max-w-7xl px-6 pb-24" id="pricing">
         <div className="mx-auto max-w-3xl text-center">
