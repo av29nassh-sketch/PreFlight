@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as childProcess from 'node:child_process';
@@ -533,31 +534,65 @@ async function readWorkspaceDaemonUrl(): Promise<string | null> {
     }
 }
 
+type DaemonSpawnCommand = {
+    command: string;
+    args: string[];
+    description: string;
+};
+
 function getPreFlightCommand(): string {
     if (process.env.PREFLIGHT_CLI_COMMAND?.trim()) {
         return process.env.PREFLIGHT_CLI_COMMAND.trim();
     }
 
-    return process.platform === 'win32' ? 'preflight.cmd' : 'preflight';
+    if (process.platform === 'win32') {
+        const appData = process.env.APPDATA;
+        if (appData) {
+            const npmShim = path.join(appData, 'npm', 'preflight.cmd');
+            if (fsSync.existsSync(npmShim)) {
+                return npmShim;
+            }
+        }
+
+        return 'preflight.cmd';
+    }
+
+    return 'preflight';
 }
 
-function getDaemonSpawnCommand(workspaceRoot: string): { command: string; args: string[] } {
+function getLocalDevelopmentCliPath(extensionPath: string): string | null {
+    const candidate = path.resolve(extensionPath, '..', '..', 'cli.js');
+    return fsSync.existsSync(candidate) ? candidate : null;
+}
+
+function getDaemonSpawnCommand(workspaceRoot: string, extensionPath: string): DaemonSpawnCommand {
+    const localCliPath = getLocalDevelopmentCliPath(extensionPath);
+    if (localCliPath) {
+        return {
+            command: process.execPath,
+            args: [localCliPath, 'daemon', workspaceRoot],
+            description: `${process.execPath} ${localCliPath} daemon ${workspaceRoot}`
+        };
+    }
+
     const preflightCommand = getPreFlightCommand();
 
     if (process.platform !== 'win32') {
         return {
             command: preflightCommand,
-            args: ['daemon', workspaceRoot]
+            args: ['daemon', workspaceRoot],
+            description: `${preflightCommand} daemon ${workspaceRoot}`
         };
     }
 
     return {
         command: 'cmd.exe',
-        args: ['/d', '/s', '/c', `"${preflightCommand}" daemon "${workspaceRoot}"`]
+        args: ['/d', '/s', '/c', `"${preflightCommand}" daemon "${workspaceRoot}"`],
+        description: `${preflightCommand} daemon ${workspaceRoot}`
     };
 }
 
-function startManagedDaemon(): void {
+function startManagedDaemon(extensionPath: string): void {
     if (managedDaemon && !managedDaemon.killed) {
         return;
     }
@@ -568,19 +603,30 @@ function startManagedDaemon(): void {
         return;
     }
 
-    const spawnCommand = getDaemonSpawnCommand(workspaceRoot);
+    const spawnCommand = getDaemonSpawnCommand(workspaceRoot, extensionPath);
+    let stderr = '';
     managedDaemon = childProcess.spawn(spawnCommand.command, spawnCommand.args, {
         cwd: workspaceRoot,
         env: {
             ...process.env,
             PREFLIGHT_DAEMON_WS_PORT: '0'
         },
-        stdio: 'ignore',
+        stdio: ['ignore', 'ignore', 'pipe'],
         windowsHide: true
     });
 
-    managedDaemon.once('exit', () => {
+    managedDaemon.stderr?.on('data', (chunk) => {
+        stderr += chunk.toString();
+    });
+
+    managedDaemon.once('exit', (code) => {
+        const message = stderr.trim();
         managedDaemon = null;
+        if (code && code !== 0) {
+            void vscode.window.showErrorMessage(
+                `PreFlight daemon exited before startup. Command: ${spawnCommand.description}${message ? ` Error: ${message}` : ''}`
+            );
+        }
     });
 
     managedDaemon.once('error', (error: NodeJS.ErrnoException) => {
@@ -762,7 +808,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (!daemonUrl) {
             if (!daemonStartAttempted) {
                 daemonStartAttempted = true;
-                startManagedDaemon();
+                startManagedDaemon(context.extensionPath);
             }
 
             if (attempt < DAEMON_RECONNECT_LIMIT) {
@@ -784,7 +830,7 @@ export function activate(context: vscode.ExtensionContext) {
         ws.on('error', () => {
             if (!daemonStartAttempted) {
                 daemonStartAttempted = true;
-                startManagedDaemon();
+                startManagedDaemon(context.extensionPath);
             }
         });
 
