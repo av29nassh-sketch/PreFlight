@@ -107,6 +107,15 @@ $env:PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
 export PREFLIGHT_PRO_KEY="PREFLIGHT-BETA-XXXXX"
 ```
 
+## Usage Metrics
+
+- **Website visits:** tracked through Vercel Web Analytics on [https://preflight-vibe.vercel.app](https://preflight-vibe.vercel.app). View them in the Vercel project dashboard under Analytics.
+- **npm downloads:** run the local report command below. npm reports package downloads, not unique human users.
+
+```bash
+npm run analytics:npm
+```
+
 ## Pricing
 
 - **Free Tier:** Unlimited scans, 10 Free Patches (Local + Deep-Reasoning AI).

@@ -67,6 +67,7 @@
     "eye:watch": "tsx src/eye/index.ts",
     "live:flow": "node scripts/live-preflight-flow.js",
     "test:windows-popup": "node scripts/test-windows-popup.js",
+    "analytics:npm": "node ./scripts/npm-downloads.mjs preflight-pro",
     "test:gauntlet": "node ./qa/preflight-gauntlet/run-100-batch-check.js",
     "migrations:scan": "tsx src/migrations/index.ts",
     "scan": "node index.js",
