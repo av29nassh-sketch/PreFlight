@@ -28,8 +28,8 @@ export interface RunWakeupOptions {
   spawnDaemon?: typeof spawnDetachedDaemon;
 }
 
-function getPreflightCommand(): string {
-  return "preflight";
+function getCliEntrypoint(): string {
+  return path.resolve(__dirname, "..", "..", "cli.js");
 }
 
 function escapeVbsString(value: string): string {
@@ -151,14 +151,13 @@ export async function setupUserAutostart(options: StartupRegistrationOptions = {
 
 export function spawnDetachedDaemon(workspaceDir = process.cwd()): childProcess.ChildProcess {
   const resolvedWorkspace = path.resolve(workspaceDir);
-  const child = childProcess.spawn(getPreflightCommand(), ["daemon", "."], {
+  const child = childProcess.spawn(process.execPath, [getCliEntrypoint(), "daemon", "."], {
     cwd: resolvedWorkspace,
     detached: true,
     env: {
       ...process.env,
       PREFLIGHT_DAEMON_WS_PORT: "0"
     },
-    shell: process.platform === "win32",
     stdio: "ignore",
     windowsHide: true
   });

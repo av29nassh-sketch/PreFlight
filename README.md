@@ -16,7 +16,7 @@ PreFlight runs in two distinct tiers depending on what your codebase needs.
 
 ```bash
 npm install -g preflight-pro
-preflight init
+preflight start
 preflight scan . --fix
 ```
 
@@ -42,13 +42,13 @@ preflight scan . --fix
 
 ## Installation Flow
 
-PreFlight supports both a terminal-first workflow and an IDE-first workflow. Both paths end with `preflight init`, because that wizard connects your editor, MCP clients, and Pro/Beta key in one place.
+PreFlight supports both a terminal-first workflow and an IDE-first workflow. Both paths start with the same global CLI and use `preflight start` to activate The Eye daemon for the current project.
 
 ### Path A: CLI
 
 ```bash
 npm install -g preflight-pro
-preflight init
+preflight start
 ```
 
 Then scan any project from its root:
@@ -59,7 +59,7 @@ preflight scan . --fix
 
 ### Path B: VS Code / Cursor
 
-1. Install the global CLI command. The VSIX gives you the in-editor UI, but the extension still uses the global `preflight` command to start The Eye daemon and run fixes.
+1. Install the global CLI command. The VSIX is optional: it gives you the in-editor visual layer, but the engine, daemon, MCP server, Windows fallback popup, and fix pipeline all live in the global `preflight` CLI.
 
 ```bash
 npm install -g preflight-pro
@@ -71,24 +71,24 @@ npm install -g preflight-pro
 - Or open [GitHub Releases](https://github.com/av29nassh-sketch/PreFlight/releases) and install the latest `preflight-companion` VSIX.
 - In VS Code or Cursor, open the Extensions panel, click the `...` menu, choose `Install from VSIX...`, and select the downloaded file.
 
-3. Run the setup wizard once:
+3. Activate PreFlight once inside the project:
 
 ```bash
-preflight init
+preflight start
 ```
 
-4. Open your project in the IDE. The extension starts The Eye automatically, watches file saves, and surfaces PreFlight alerts in-editor.
+4. Open your project in the IDE. The extension connects to The Eye, watches file saves through the daemon, and surfaces PreFlight alerts in-editor.
 
 ### The Eye and MCP
 
-- **The Eye:** The VS Code/Cursor extension starts PreFlight's local daemon automatically. It watches file saves and raises in-editor alerts when AI-generated code introduces a hard-block issue.
-- **MCP bridge:** `preflight init` can also wire `preflight mcp` into supported AI editors so agents can call PreFlight tools without leaving the coding flow.
+- **The Eye:** `preflight start` registers the current project and starts PreFlight's local daemon. The VS Code/Cursor extension is the optional visual layer that adds squiggles, IDE alerts, and fix buttons.
+- **MCP bridge:** `preflight mcp` is available for supported AI editors so agents can call PreFlight tools without leaving the coding flow.
 
 ### Beta / Pro Keys
 
 Free users get unlimited scans and 10 total patches across local fixes and proxy-backed AI fixes. After the 10 free patches are used, unlimited fixes require a Pro/Beta key.
 
-You can add your key during `preflight init`, or activate it directly:
+You can activate your key directly:
 
 ```bash
 preflight auth PREFLIGHT-BETA-XXXXX

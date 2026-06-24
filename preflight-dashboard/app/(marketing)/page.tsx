@@ -17,7 +17,7 @@ const vsixDownloadUrl = "/downloads/preflight-companion-0.0.1.vsix";
 
 const terminalLines = [
   "npm install -g preflight-pro",
-  "preflight init"
+  "preflight start"
 ];
 
 const pricingPlans = [
@@ -77,7 +77,7 @@ const setupPaths = [
     href: "https://github.com/av29nassh-sketch/PreFlight",
     steps: [
       "npm install -g preflight-pro",
-      "preflight init",
+      "preflight start",
       "preflight scan . --fix"
     ]
   },
@@ -90,7 +90,7 @@ const setupPaths = [
       "npm install -g preflight-pro",
       "Download the VSIX extension",
       "Extensions > ... > Install from VSIX",
-      "preflight init",
+      "preflight start",
       "Open your project and save a file"
     ]
   }
@@ -136,16 +136,16 @@ function SetupPaths() {
             setup order
           </div>
           <h2 className="mt-5 text-3xl font-semibold tracking-[-0.03em] text-white md:text-4xl">
-            Two ways in. Both end with <span className="text-cyan-200">preflight init</span>.
+            Two ways in. Both activate with <span className="text-cyan-200">preflight start</span>.
           </h2>
           <p className="mt-4 text-base leading-7 text-zinc-400">
-            Install the global CLI once so The Eye daemon, MCP server, and extension can all call the same <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-zinc-200">preflight</code> command. Then run <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-zinc-200">preflight init</code> to connect your editor, MCP clients, and beta key.
+            Install the global CLI once so The Eye daemon, MCP server, Windows fallback popup, and extension can all call the same <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-zinc-200">preflight</code> command. Then run <code className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-zinc-200">preflight start</code> in a project to register it and start watching.
           </p>
           <div className="mt-4 rounded-2xl border border-white/10 bg-black/35 p-4 text-sm leading-6 text-zinc-300">
-            <span className="font-semibold text-white">VSIX beta note:</span> the extension is the IDE surface. The global CLI is still required because it starts The Eye daemon, MCP server, and fix engine behind the scenes.
+            <span className="font-semibold text-white">VSIX beta note:</span> the extension is optional visual UI. The global CLI owns the engine, The Eye daemon, MCP server, fallback popup, and fix pipeline.
           </div>
           <div className="mt-6 rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.07] p-4 text-sm leading-6 text-cyan-100">
-            <span className="font-semibold text-cyan-200">Beta / Pro keys:</span> Free includes unlimited scans and 10 total patches. After that, paste your issued key during <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-cyan-50">preflight init</code> or run <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-cyan-50">preflight auth YOUR_KEY</code> to unlock unlimited fixes.
+            <span className="font-semibold text-cyan-200">Beta / Pro keys:</span> Free includes unlimited scans and 10 total patches. After that, run <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-cyan-50">preflight auth YOUR_KEY</code> to unlock unlimited fixes.
           </div>
         </div>
 
