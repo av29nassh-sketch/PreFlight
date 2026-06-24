@@ -79,9 +79,12 @@ preflight start
 
 4. Open your project in the IDE. The extension connects to The Eye, watches file saves through the daemon, and surfaces PreFlight alerts in-editor.
 
+If the VS Code/Cursor extension is not installed or not connected, The Eye still runs. For terminal-only workflows and desktop AI agents, PreFlight falls back to a native Windows popup when a hard-block vulnerability is detected.
+
 ### The Eye and MCP
 
 - **The Eye:** `preflight start` registers the current project and starts PreFlight's local daemon. The VS Code/Cursor extension is the optional visual layer that adds squiggles, IDE alerts, and fix buttons.
+- **Windows fallback popup:** When no extension client is connected, the daemon shows a native Windows hard-block notification instead. This covers terminal-only users and desktop-agent users who do not install the VSIX.
 - **MCP bridge:** `preflight mcp` is available for supported AI editors so agents can call PreFlight tools without leaving the coding flow.
 
 ### Beta / Pro Keys
@@ -116,7 +119,7 @@ PreFlight is now powered by deeper local analysis primitives:
 
 - **Micro-Fuzzer:** Generates focused security payloads for risky data-flow paths, such as SQL injection, command injection, auth bypass, SSRF, and path traversal.
 - **Quantized CPG (Code Property Graph):** Builds a compact in-memory graph of syntax, control flow, and data flow so PreFlight can trace untrusted input into dangerous sinks instead of relying on brittle string matching.
-- **The Eye daemon:** Runs locally through the CLI/extension workflow and watches file saves so issues appear while the AI coding session is still active.
+- **The Eye daemon:** Runs locally through the CLI/extension workflow and watches file saves so issues appear while the AI coding session is still active. If the extension is not installed, Windows users still receive native popup alerts for hard-block findings.
 
 ## Tri-State Risk Score Engine
 

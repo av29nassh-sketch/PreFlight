@@ -29,6 +29,7 @@ const pricingPlans = [
     features: [
       "Unlimited local AST scanning",
       "The Eye daemon and save-time IDE alerts",
+      "Native Windows popup fallback without the VSIX",
       "MCP integration for AI-native editors",
       "10 Free Deep-Reasoning AI Fixes"
     ],
@@ -143,6 +144,9 @@ function SetupPaths() {
           </p>
           <div className="mt-4 rounded-2xl border border-white/10 bg-black/35 p-4 text-sm leading-6 text-zinc-300">
             <span className="font-semibold text-white">VSIX beta note:</span> the extension is optional visual UI. The global CLI owns the engine, The Eye daemon, MCP server, fallback popup, and fix pipeline.
+          </div>
+          <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/[0.07] p-4 text-sm leading-6 text-emerald-50">
+            <span className="font-semibold text-emerald-200">No extension installed?</span> The Eye still watches your project. Terminal-only users and desktop-agent users get native Windows hard-block popups when no VS Code/Cursor extension client is connected.
           </div>
           <div className="mt-6 rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.07] p-4 text-sm leading-6 text-cyan-100">
             <span className="font-semibold text-cyan-200">Beta / Pro keys:</span> Free includes unlimited scans and 10 total patches. After that, run <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-cyan-50">preflight auth YOUR_KEY</code> to unlock unlimited fixes.
