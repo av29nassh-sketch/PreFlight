@@ -13,7 +13,7 @@ import { AuditRequestCard } from "../../components/audit-request-card";
 export const dynamic = "force-dynamic";
 
 const waitlistUrl = "https://waitlister.me/p/preflight";
-const vsixDownloadUrl = "/downloads/preflight-companion-0.0.3.vsix";
+const vsixDownloadUrl = "/downloads/preflight-companion-0.0.4.vsix";
 
 const terminalLines = [
   "npm install -g preflight-pro",
