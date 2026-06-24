@@ -67,7 +67,7 @@ npm install -g preflight-pro
 
 2. Download and install the PreFlight Companion VSIX extension:
 
-- [Download VSIX from the PreFlight website](https://preflight-vibe.vercel.app/downloads/preflight-companion-0.0.1.vsix)
+- [Download VSIX from the PreFlight website](https://preflight-vibe.vercel.app/downloads/preflight-companion-0.0.2.vsix)
 - Or open [GitHub Releases](https://github.com/av29nassh-sketch/PreFlight/releases) and install the latest `preflight-companion` VSIX.
 - In VS Code or Cursor, open the Extensions panel, click the `...` menu, choose `Install from VSIX...`, and select the downloaded file.
 

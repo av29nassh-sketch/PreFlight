@@ -285,6 +285,15 @@ function getDaemonSpawnCommand(workspaceRoot, extensionPath) {
         description: `${preflightCommand} daemon ${workspaceRoot}`
     };
 }
+async function promptInstallCli() {
+    const selection = await vscode.window.showErrorMessage("PreFlight's core engine is missing. Install the CLI to enable AI security scanning.", 'Install CLI');
+    if (selection !== 'Install CLI') {
+        return;
+    }
+    const terminal = vscode.window.createTerminal('PreFlight Setup');
+    terminal.show();
+    terminal.sendText('npm install -g preflight-pro && preflight start');
+}
 function startManagedDaemon(extensionPath) {
     if (managedDaemon && !managedDaemon.killed) {
         return;
@@ -309,13 +318,13 @@ function startManagedDaemon(extensionPath) {
     managedDaemon.once('exit', (code) => {
         managedDaemon = null;
         if (code && code !== 0) {
-            void vscode.window.showErrorMessage(`PreFlight daemon exited before startup. Command: ${spawnCommand.description}`);
+            void promptInstallCli();
         }
     });
     managedDaemon.once('error', (error) => {
         managedDaemon = null;
         if (error.code === 'ENOENT') {
-            void vscode.window.showErrorMessage('PreFlight CLI not found. Please install it globally via npm install -g preflight-pro or ensure it is in your PATH.');
+            void promptInstallCli();
             return;
         }
         void vscode.window.showErrorMessage(`PreFlight daemon failed to start: ${error.message}`);
