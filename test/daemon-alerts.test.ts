@@ -1,7 +1,7 @@
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { formatHardBlockAlert } from "../src/daemon/engine";
-import { shouldIgnoreWatchPath } from "../src/eye/ignoreRules";
+import { formatHardBlockAlert, PreFlightDaemon } from "../src/daemon/engine";
+import { shouldIgnoreWatchPath, shouldWatchSourcePath } from "../src/eye/ignoreRules";
 import type { ReleaseFuzzerFinding } from "../src/fuzzer/runFuzzer";
 import type { ReleaseGateFinding } from "../src/release-gate/model";
 
@@ -62,5 +62,35 @@ describe("PreFlight daemon extension alerts", () => {
     expect(shouldIgnoreWatchPath(path.join("tests", "api.spec.ts"))).toBe(true);
     expect(shouldIgnoreWatchPath(path.join("__fixtures__", "bad-route.js"))).toBe(true);
     expect(shouldIgnoreWatchPath(path.join("src", "api", "network.js"))).toBe(false);
+  });
+
+  test("daemon watcher only allows supported source files", () => {
+    expect(shouldWatchSourcePath(path.join("src", "api", "network.js"))).toBe(true);
+    expect(shouldWatchSourcePath(path.join("src", "api", "route.ts"))).toBe(true);
+    expect(shouldWatchSourcePath(path.join("packages", "api.v2", "src", "index.ts"))).toBe(true);
+    expect(shouldWatchSourcePath(path.join("src", "workers", "job.py"))).toBe(true);
+    expect(shouldWatchSourcePath(path.join("src", "main.go"))).toBe(true);
+    expect(shouldWatchSourcePath(path.join("src", "main.rs"))).toBe(true);
+    expect(shouldWatchSourcePath(path.join("README.md"))).toBe(false);
+    expect(shouldWatchSourcePath(path.join("node_modules", "pkg", "index.js"))).toBe(false);
+    expect(shouldWatchSourcePath(path.join(".git", "hooks", "pre-commit.js"))).toBe(false);
+    expect(shouldWatchSourcePath(path.join(".env"))).toBe(false);
+    expect(shouldWatchSourcePath(path.join("dist", "bundle.js"))).toBe(false);
+    expect(shouldWatchSourcePath(path.join("build", "server.js"))).toBe(false);
+  });
+
+  test("daemon defaults to an ephemeral WebSocket port for multi-workspace safety", () => {
+    const previousPort = process.env.PREFLIGHT_DAEMON_WS_PORT;
+    delete process.env.PREFLIGHT_DAEMON_WS_PORT;
+    try {
+      const daemon = new PreFlightDaemon({ targetDir: process.cwd() });
+      expect(daemon.websocketPort).toBe(0);
+    } finally {
+      if (previousPort === undefined) {
+        delete process.env.PREFLIGHT_DAEMON_WS_PORT;
+      } else {
+        process.env.PREFLIGHT_DAEMON_WS_PORT = previousPort;
+      }
+    }
   });
 });

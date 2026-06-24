@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { shouldIgnoreWatchPath } from "../eye/ignoreRules";
-import { PreFlightCPG } from "../cpg";
+import { PreFlightCPG, type TreeSitterInput } from "../cpg";
 import { PreFlightFuzzer, type FuzzResult } from "./PreFlightFuzzer";
 
 const { parseSourceCode } = require("../../taintTracker");
@@ -65,7 +65,7 @@ function normalizeFuzzableFiles(targetDir: string, candidateFiles?: string[]): s
 
 export async function runFuzzerScan(targetDir: string, candidateFiles?: string[]): Promise<ReleaseFuzzerFinding[]> {
   const resolvedTargetDir = path.resolve(targetDir);
-  const astByFile: Record<string, unknown> = {};
+  const astByFile: Record<string, TreeSitterInput> = {};
   const sourceByFile: Record<string, string> = {};
   const files = normalizeFuzzableFiles(resolvedTargetDir, candidateFiles) ?? (await collectFuzzableFiles(resolvedTargetDir));
 

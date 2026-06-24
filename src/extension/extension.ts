@@ -1,10 +1,8 @@
 import * as fs from 'node:fs/promises';
 import * as fsSync from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import * as childProcess from 'node:child_process';
 import * as vscode from 'vscode';
-import ts = require('typescript');
 import WebSocket = require('ws');
 
 type PreFlightAlertMessage = {
@@ -19,368 +17,25 @@ type PreFlightAlertMessage = {
     detectedAt: string;
 };
 
-type PreFlightProxyResponse = {
-    code?: string;
-    patchedCode?: string;
-    replacement?: string;
-    sourceCode?: string;
-    patch?: string;
-    diff?: string;
-    content?: Array<{ text?: string }>;
+type PreFlightPatchResultMessage = {
+    type: 'PATCH_RESULT';
+    ok: boolean;
+    filePath?: string;
+    message: string;
+    detectedAt: string;
 };
 
-type PreFlightExtensionConfig = {
-    licenseKey?: unknown;
-    freeFixesUsed?: unknown;
-};
-
-type ExtensionFixEntitlement = {
-    licenseKey: string;
-    isFree: boolean;
-};
-
-type ExtensionRemediationResult = {
-    patchedCode: string;
-    entitlement: ExtensionFixEntitlement;
-};
-
-const PREFLIGHT_PROXY_ENDPOINT = 'https://preflight-proxy.vercel.app/api/v1/remediation';
 const PREFLIGHT_DAEMON_MANIFEST = 'preflight-daemon.json';
-const FREE_FIX_LIMIT = 10;
-const FREE_FIX_PROXY_TOKEN = 'PREFLIGHT-FREE-FIX';
-const FREE_FIXES_EXHAUSTED_MESSAGE =
-    'You have used your 10 free AI/local fixes. To unlock unlimited deep reasoning remediation, upgrade to PreFlight Pro ($19/mo) at https://preflight-vibe.vercel.app/';
 const ALERT_POPUP_DEBOUNCE_MS = 250;
 const DAEMON_RECONNECT_MS = 750;
 const DAEMON_RECONNECT_LIMIT = 20;
+const DAEMON_PORT_PROBE_MS = 750;
 const diagnosticsByUri = new Map<string, PreFlightAlertMessage[]>();
 const diagnosticObjectsByUri = new Map<string, vscode.Diagnostic[]>();
 const pendingAlertPopups = new Map<string, NodeJS.Timeout>();
 const pendingVerificationResolvers = new Map<string, Array<() => void>>();
+const pendingPatchResultResolvers = new Map<string, Array<(message: PreFlightPatchResultMessage) => void>>();
 let managedDaemon: childProcess.ChildProcess | null = null;
-
-function getConfigPath(): string {
-    const homeDir = process.env.PREFLIGHT_HOME && process.env.PREFLIGHT_HOME.trim()
-        ? process.env.PREFLIGHT_HOME.trim()
-        : os.homedir();
-    return path.join(homeDir, '.preflight', 'config.json');
-}
-
-function normalizeFreeFixesUsed(value: unknown): number {
-    return Number.isInteger(value) && typeof value === 'number' && value > 0 ? value : 0;
-}
-
-async function readExtensionConfig(): Promise<PreFlightExtensionConfig> {
-    try {
-        const rawConfig = await fs.readFile(getConfigPath(), 'utf8');
-        const parsed = JSON.parse(rawConfig) as PreFlightExtensionConfig;
-        return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch (error: any) {
-        if (error?.code === 'ENOENT') {
-            return {};
-        }
-
-        throw error;
-    }
-}
-
-async function writeExtensionConfig(config: PreFlightExtensionConfig): Promise<void> {
-    const configPath = getConfigPath();
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, {
-        encoding: 'utf8',
-        mode: 0o600
-    });
-    await fs.chmod(configPath, 0o600).catch(() => undefined);
-}
-
-async function resolveFixEntitlement(): Promise<ExtensionFixEntitlement> {
-    const envKey = (process.env.PREFLIGHT_PRO_KEY || process.env.PREFLIGHT_PRO_LICENSE_KEY || '').trim();
-    if (envKey) {
-        return { licenseKey: envKey, isFree: false };
-    }
-
-    const config = await readExtensionConfig();
-    const storedKey = typeof config.licenseKey === 'string' ? config.licenseKey.trim() : '';
-    if (storedKey) {
-        return { licenseKey: storedKey, isFree: false };
-    }
-
-    const freeFixesUsed = normalizeFreeFixesUsed(config.freeFixesUsed);
-    if (freeFixesUsed >= FREE_FIX_LIMIT) {
-        throw new Error(FREE_FIXES_EXHAUSTED_MESSAGE);
-    }
-
-    return { licenseKey: FREE_FIX_PROXY_TOKEN, isFree: true };
-}
-
-async function recordFreeFixUsageIfNeeded(entitlement: ExtensionFixEntitlement): Promise<void> {
-    if (!entitlement.isFree) {
-        return;
-    }
-
-    const config = await readExtensionConfig();
-    const freeFixesUsed = normalizeFreeFixesUsed(config.freeFixesUsed);
-    await writeExtensionConfig({
-        ...config,
-        freeFixesUsed: freeFixesUsed + 1
-    });
-}
-
-function buildFixHeaders(entitlement: ExtensionFixEntitlement): Record<string, string> {
-    if (entitlement.isFree) {
-        return {
-            Authorization: `Bearer ${entitlement.licenseKey}`,
-            'X-PreFlight-Free-Fix': '1'
-        };
-    }
-
-    return {
-        Authorization: `Bearer ${entitlement.licenseKey}`,
-        'X-PreFlight-Pro-Key': entitlement.licenseKey
-    };
-}
-
-function firstTextBlock(response: PreFlightProxyResponse): string | null {
-    const content = Array.isArray(response.content) ? response.content : [];
-    const textBlock = content.find((item) => item && typeof item.text === 'string' && item.text.trim());
-    return textBlock?.text?.trim() || null;
-}
-
-function extractCodeFence(rawText: string): string | null {
-    const match = rawText.match(/```(?:[A-Za-z0-9_-]+)?\s*\r?\n([\s\S]*?)```/);
-    return match ? match[1].replace(/\s+$/, '\n') : null;
-}
-
-function extractRemediationText(rawBody: string): string {
-    let parsed: PreFlightProxyResponse | null = null;
-    try {
-        parsed = JSON.parse(rawBody) as PreFlightProxyResponse;
-    } catch {
-        parsed = null;
-    }
-
-    if (parsed) {
-        const directCode = parsed.code || parsed.patchedCode || parsed.replacement || parsed.sourceCode;
-        if (typeof directCode === 'string' && directCode.trim()) {
-            return directCode;
-        }
-
-        const diff = parsed.patch || parsed.diff;
-        if (typeof diff === 'string' && diff.trim()) {
-            return diff;
-        }
-
-        const textBlock = firstTextBlock(parsed);
-        if (textBlock) {
-            return textBlock;
-        }
-    }
-
-    return rawBody.trim();
-}
-
-function looksLikeUnifiedDiff(text: string): boolean {
-    return /(^|\n)(diff --git |--- |\+\+\+ |@@ -\d+)/.test(text);
-}
-
-function parseHunkStart(line: string): number | null {
-    const match = line.match(/^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@/);
-    return match ? Number.parseInt(match[1], 10) : null;
-}
-
-function applyUnifiedDiff(originalCode: string, diffText: string): string {
-    const originalLines = originalCode.split(/\r?\n/);
-    const diffLines = diffText.split(/\r?\n/);
-    const output: string[] = [];
-    let originalIndex = 0;
-    let appliedHunk = false;
-
-    for (let index = 0; index < diffLines.length; index += 1) {
-        const line = diffLines[index];
-        if (!line.startsWith('@@ ')) {
-            continue;
-        }
-
-        const oldStart = parseHunkStart(line);
-        if (!oldStart) {
-            throw new Error('Proxy returned an unsupported unified diff hunk.');
-        }
-
-        const targetIndex = oldStart - 1;
-        while (originalIndex < targetIndex) {
-            output.push(originalLines[originalIndex]);
-            originalIndex += 1;
-        }
-
-        index += 1;
-        while (index < diffLines.length && !diffLines[index].startsWith('@@ ')) {
-            const hunkLine = diffLines[index];
-
-            if (hunkLine.startsWith('\\ No newline')) {
-                index += 1;
-                continue;
-            }
-
-            if (hunkLine.startsWith('+') && !hunkLine.startsWith('+++')) {
-                output.push(hunkLine.slice(1));
-            } else if (hunkLine.startsWith('-') && !hunkLine.startsWith('---')) {
-                originalIndex += 1;
-            } else if (hunkLine.startsWith(' ')) {
-                output.push(originalLines[originalIndex] ?? hunkLine.slice(1));
-                originalIndex += 1;
-            }
-
-            index += 1;
-        }
-
-        index -= 1;
-        appliedHunk = true;
-    }
-
-    if (!appliedHunk) {
-        throw new Error('Proxy returned a unified diff without an applicable hunk.');
-    }
-
-    while (originalIndex < originalLines.length) {
-        output.push(originalLines[originalIndex]);
-        originalIndex += 1;
-    }
-
-    return output.join('\n');
-}
-
-function resolvePatchedCode(originalCode: string, remediationText: string): string {
-    if (looksLikeUnifiedDiff(remediationText)) {
-        return applyUnifiedDiff(originalCode, remediationText);
-    }
-
-    const fencedCode = extractCodeFence(remediationText);
-    return fencedCode || remediationText;
-}
-
-function shouldSyntaxValidatePatch(filePath: string): boolean {
-    return /\.(?:[cm]?[jt]sx?)$/i.test(filePath);
-}
-
-function assertPatchedSyntaxSafe(filePath: string, patchedCode: string): void {
-    if (!shouldSyntaxValidatePatch(filePath)) {
-        return;
-    }
-
-    const result = ts.transpileModule(patchedCode, {
-        fileName: filePath,
-        compilerOptions: {
-            allowJs: true,
-            checkJs: false,
-            jsx: ts.JsxEmit.ReactJSX,
-            module: ts.ModuleKind.CommonJS,
-            target: ts.ScriptTarget.ES2020
-        },
-        reportDiagnostics: true,
-        transformers: undefined
-    });
-    const syntaxErrors = (result.diagnostics || []).filter((diagnostic) => {
-        return diagnostic.category === ts.DiagnosticCategory.Error;
-    });
-
-    if (syntaxErrors.length > 0) {
-        throw new Error('PreFlight aborted the fix: AI generated malformed syntax.');
-    }
-}
-
-function getLineText(sourceCode: string, line?: number): string {
-    if (!line || line < 1) {
-        return '';
-    }
-
-    return sourceCode.split(/\r?\n/)[line - 1] || '';
-}
-
-function isCommandInjectionContext(alert: PreFlightAlertMessage, sourceCode: string): boolean {
-    const issueText = `${alert.issueType} ${alert.message} ${alert.payload || ''}`;
-    if (/command[-_\s]?injection|command-execution|child_process|\bexec\b|\bspawn\b/i.test(issueText)) {
-        return true;
-    }
-
-    const lineText = getLineText(sourceCode, alert.line);
-    return /\b(?:exec|execSync|spawn|spawnSync)\s*\(/.test(lineText) || /require\(['"]child_process['"]\)/.test(sourceCode);
-}
-
-function normalizeChildProcessImportForExecFile(code: string): string {
-    return code.replace(
-        /const\s*\{\s*exec\s*\}\s*=\s*require\((['"])child_process\1\);?/,
-        "const { execFile } = require('child_process');"
-    );
-}
-
-function hardenCommandInjectionPatch(originalCode: string, patchedCode: string): string {
-    const originallyUsedChildProcess = /require\(['"]child_process['"]\)/.test(originalCode);
-    if (!originallyUsedChildProcess) {
-        return patchedCode;
-    }
-
-    let nextCode = normalizeChildProcessImportForExecFile(patchedCode);
-
-    nextCode = nextCode.replace(
-        /\bexec\s*\(\s*(['"])ping(?:\s+-c\s+4)?\s+\1\s*\+\s*([A-Za-z_$][\w$]*)\s*,/g,
-        "execFile('ping', ['-c', '4', $2],"
-    );
-
-    const commandAssignmentPattern = /const\s+([A-Za-z_$][\w$]*)\s*=\s*(['"])ping(?:\s+-c\s+4)?\s+\2\s*\+\s*([A-Za-z_$][\w$]*)\s*;?/g;
-    const commandVariables = new Map<string, string>();
-    nextCode = nextCode.replace(commandAssignmentPattern, (_match, commandName: string, _quote: string, inputName: string) => {
-        commandVariables.set(commandName, inputName);
-        return '';
-    });
-
-    for (const [commandName, inputName] of commandVariables) {
-        nextCode = nextCode.replace(
-            new RegExp(`\\bexec\\s*\\(\\s*${commandName}\\s*,`, 'g'),
-            `execFile('ping', ['-c', '4', ${inputName}],`
-        );
-    }
-
-    return nextCode;
-}
-
-async function requestPreFlightRemediation(alert: PreFlightAlertMessage, sourceCode: string): Promise<ExtensionRemediationResult> {
-    const entitlement = await resolveFixEntitlement();
-    const isCommandInjection = isCommandInjectionContext(alert, sourceCode);
-    const vulnerabilityType = isCommandInjection ? 'COMMAND_INJECTION' : alert.issueType;
-    const breakingPayload = (
-        alert.payload ||
-        (isCommandInjection ? 'user-controlled input reaches child_process execution' : '') ||
-        alert.message ||
-        alert.issueType ||
-        'PreFlight vulnerability'
-    ).trim();
-    const response = await fetch(PREFLIGHT_PROXY_ENDPOINT, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            ...buildFixHeaders(entitlement)
-        },
-        body: JSON.stringify({
-            filePath: alert.filePath,
-            sourceCode,
-            vulnerabilityType,
-            breakingPayload,
-            executionTrail: [`${alert.filePath}:${alert.line ?? 1}`, alert.message, getLineText(sourceCode, alert.line)].filter(Boolean)
-        })
-    });
-
-    const rawBody = await response.text();
-    if (!response.ok) {
-        throw new Error(rawBody || `PreFlight remediation failed with status ${response.status}.`);
-    }
-
-    const patchedCode = resolvePatchedCode(sourceCode, extractRemediationText(rawBody));
-    return {
-        patchedCode: isCommandInjection ? hardenCommandInjectionPatch(sourceCode, patchedCode) : patchedCode,
-        entitlement
-    };
-}
 
 function getPrimaryAlert(uri: vscode.Uri): PreFlightAlertMessage | undefined {
     return diagnosticsByUri.get(uri.toString())?.[0];
@@ -455,24 +110,6 @@ function scheduleConsolidatedPopup(uri: vscode.Uri, lineRange: vscode.Range): vo
     pendingAlertPopups.set(uriKey, timer);
 }
 
-async function replaceDocument(document: vscode.TextDocument, patchedCode: string): Promise<void> {
-    assertPatchedSyntaxSafe(document.uri.fsPath, patchedCode);
-
-    const edit = new vscode.WorkspaceEdit();
-    const fullRange = new vscode.Range(
-        document.positionAt(0),
-        document.positionAt(document.getText().length)
-    );
-
-    edit.replace(document.uri, fullRange, patchedCode);
-    const applied = await vscode.workspace.applyEdit(edit);
-    if (!applied) {
-        throw new Error('VS Code rejected the PreFlight remediation edit.');
-    }
-
-    await document.save();
-}
-
 function waitForPostFixVerification(uri: vscode.Uri, timeoutMs = 6000): Promise<void> {
     const uriKey = uri.toString();
 
@@ -497,6 +134,43 @@ function waitForPostFixVerification(uri: vscode.Uri, timeoutMs = 6000): Promise<
     });
 }
 
+function waitForPatchResult(uri: vscode.Uri, timeoutMs = 30_000): Promise<PreFlightPatchResultMessage> {
+    const uriKey = uri.toString();
+
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            const resolvers = pendingPatchResultResolvers.get(uriKey) || [];
+            pendingPatchResultResolvers.set(
+                uriKey,
+                resolvers.filter((candidate) => candidate !== onResult)
+            );
+            reject(new Error('PreFlight daemon did not return a patch result in time.'));
+        }, timeoutMs);
+
+        const onResult = (message: PreFlightPatchResultMessage) => {
+            clearTimeout(timeout);
+            resolve(message);
+        };
+
+        const resolvers = pendingPatchResultResolvers.get(uriKey) || [];
+        resolvers.push(onResult);
+        pendingPatchResultResolvers.set(uriKey, resolvers);
+    });
+}
+
+function resolvePatchResult(message: PreFlightPatchResultMessage): void {
+    if (!message.filePath) {
+        return;
+    }
+
+    const uriKey = vscode.Uri.file(message.filePath).toString();
+    const resolvers = pendingPatchResultResolvers.get(uriKey) || [];
+    pendingPatchResultResolvers.delete(uriKey);
+    for (const resolve of resolvers) {
+        resolve(message);
+    }
+}
+
 function getWorkspaceRoot(): string | null {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
 }
@@ -504,6 +178,57 @@ function getWorkspaceRoot(): string | null {
 function getDaemonManifestPath(): string | null {
     const workspaceRoot = getWorkspaceRoot();
     return workspaceRoot ? path.join(workspaceRoot, '.vscode', PREFLIGHT_DAEMON_MANIFEST) : null;
+}
+
+function isDaemonUrlReachable(daemonUrl: string, expectedTargetDir?: string): Promise<boolean> {
+    try {
+        const parsed = new URL(daemonUrl);
+        if (!/^wss?:$/.test(parsed.protocol)) {
+            return Promise.resolve(false);
+        }
+    } catch {
+        return Promise.resolve(false);
+    }
+
+    return new Promise((resolve) => {
+        const socket = new WebSocket(daemonUrl);
+        const timeout = setTimeout(() => finish(false), DAEMON_PORT_PROBE_MS);
+        let settled = false;
+        const finish = (reachable: boolean) => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            clearTimeout(timeout);
+            socket.removeAllListeners();
+            socket.terminate();
+            resolve(reachable);
+        };
+
+        socket.once('message', (rawMessage) => {
+            try {
+                const message = JSON.parse(rawMessage.toString());
+                const rawTargetDir = message?.targetDir || message?.state?.targetDir;
+                const daemonTargetDir = typeof rawTargetDir === 'string'
+                    ? path.resolve(rawTargetDir)
+                    : null;
+                finish(message?.type === 'STATE' && (!expectedTargetDir || daemonTargetDir === path.resolve(expectedTargetDir)));
+            } catch {
+                finish(false);
+            }
+        });
+        socket.once('error', () => finish(false));
+        socket.once('close', () => finish(false));
+    });
+}
+
+async function removeStaleDaemonManifest(manifestPath: string): Promise<void> {
+    try {
+        await fs.rm(manifestPath, { force: true });
+    } catch {
+        // Best-effort cleanup. A fresh daemon start will rewrite the manifest.
+    }
 }
 
 async function readWorkspaceDaemonUrl(): Promise<string | null> {
@@ -521,9 +246,20 @@ async function readWorkspaceDaemonUrl(): Promise<string | null> {
             return null;
         }
 
-        return typeof manifest.websocketUrl === 'string' && manifest.websocketUrl.trim()
+        const daemonUrl = typeof manifest.websocketUrl === 'string' && manifest.websocketUrl.trim()
             ? manifest.websocketUrl.trim()
             : null;
+        if (!daemonUrl) {
+            return null;
+        }
+
+        const isReachable = await isDaemonUrlReachable(daemonUrl, workspaceRoot || undefined);
+        if (!isReachable) {
+            await removeStaleDaemonManifest(manifestPath);
+            return null;
+        }
+
+        return daemonUrl;
     } catch (error: any) {
         if (error?.code === 'ENOENT') {
             return null;
@@ -604,27 +340,23 @@ function startManagedDaemon(extensionPath: string): void {
     }
 
     const spawnCommand = getDaemonSpawnCommand(workspaceRoot, extensionPath);
-    let stderr = '';
     managedDaemon = childProcess.spawn(spawnCommand.command, spawnCommand.args, {
         cwd: workspaceRoot,
         env: {
             ...process.env,
             PREFLIGHT_DAEMON_WS_PORT: '0'
         },
-        stdio: ['ignore', 'ignore', 'pipe'],
+        detached: true,
+        stdio: 'ignore',
         windowsHide: true
     });
-
-    managedDaemon.stderr?.on('data', (chunk) => {
-        stderr += chunk.toString();
-    });
+    managedDaemon.unref();
 
     managedDaemon.once('exit', (code) => {
-        const message = stderr.trim();
         managedDaemon = null;
         if (code && code !== 0) {
             void vscode.window.showErrorMessage(
-                `PreFlight daemon exited before startup. Command: ${spawnCommand.description}${message ? ` Error: ${message}` : ''}`
+                `PreFlight daemon exited before startup. Command: ${spawnCommand.description}`
             );
         }
     });
@@ -676,6 +408,11 @@ export function activate(context: vscode.ExtensionContext) {
         statusBarItem.show();
     };
 
+    let ws: WebSocket | null = null;
+    let reconnectTimer: NodeJS.Timeout | null = null;
+    let daemonStartAttempted = false;
+    let disposed = false;
+
     // 1. The Lightbulb (Strictly filtered to PreFlight)
     vscode.languages.registerCodeActionsProvider(
         { scheme: 'file' },
@@ -720,18 +457,29 @@ export function activate(context: vscode.ExtensionContext) {
                     throw new Error('PreFlight could not determine which file to fix.');
                 }
 
+                if (!ws || ws.readyState !== WebSocket.OPEN) {
+                    throw new Error('PreFlight daemon is not connected yet. Save the file again or reload the window.');
+                }
+
                 const alert = getPrimaryAlert(uri);
                 if (!alert) {
                     throw new Error('No active PreFlight diagnostic found for this file.');
                 }
 
-                const document = await vscode.workspace.openTextDocument(uri);
-                const sourceCode = document.getText();
-                const remediation = await requestPreFlightRemediation(alert, sourceCode);
                 const verifiedClear = waitForPostFixVerification(uri);
-                await replaceDocument(document, remediation.patchedCode);
+                const patchResult = waitForPatchResult(uri);
+                ws.send(JSON.stringify({
+                    type: 'patch_file',
+                    filePath: uri.fsPath
+                }));
+
+                const result = await patchResult;
+                if (!result.ok) {
+                    void verifiedClear.catch(() => undefined);
+                    throw new Error(result.message);
+                }
+
                 await verifiedClear;
-                await recordFreeFixUsageIfNeeded(remediation.entitlement);
             }
         ).then(
             () => vscode.window.showInformationMessage('Vulnerability remediated by PreFlight AI.'),
@@ -742,6 +490,11 @@ export function activate(context: vscode.ExtensionContext) {
     const handleWebSocketMessage = async (data: WebSocket.RawData) => {
         const message = JSON.parse(data.toString());
         console.log('PreFlight WebSocket received:', message);
+
+        if (message.type === 'PATCH_RESULT') {
+            resolvePatchResult(message as PreFlightPatchResultMessage);
+            return;
+        }
 
         if (message.type === 'CLEAR' && message.filePath) {
             const uri = vscode.Uri.file(message.filePath);
@@ -794,11 +547,6 @@ export function activate(context: vscode.ExtensionContext) {
     };
 
     // 3. The WebSocket Connection (auto-starts The Eye if the daemon is not running)
-    let ws: WebSocket | null = null;
-    let reconnectTimer: NodeJS.Timeout | null = null;
-    let daemonStartAttempted = false;
-    let disposed = false;
-
     const connectToDaemon = async (attempt = 0): Promise<void> => {
         if (disposed) {
             return;
@@ -823,6 +571,10 @@ export function activate(context: vscode.ExtensionContext) {
 
         ws.on('open', () => {
             console.log('PreFlight daemon connected.');
+            ws?.send(JSON.stringify({
+                type: 'editor_hello',
+                client: 'vscode'
+            }));
         });
 
         ws.on('message', handleWebSocketMessage);
@@ -839,6 +591,7 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
 
+            daemonStartAttempted = false;
             reconnectTimer = setTimeout(() => {
                 void connectToDaemon(attempt + 1);
             }, DAEMON_RECONNECT_MS);
@@ -854,7 +607,6 @@ export function activate(context: vscode.ExtensionContext) {
                 clearTimeout(reconnectTimer);
             }
             ws?.close();
-            managedDaemon?.kill();
             managedDaemon = null;
         }
     });

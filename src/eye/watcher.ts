@@ -2,7 +2,7 @@ import chokidar, { type FSWatcher } from "chokidar";
 import fs from "node:fs";
 import path from "node:path";
 import { DebouncedWatchEventQueue, type WatchEventBatchHandler } from "./eventQueue";
-import { shouldIgnoreWatchPath } from "./ignoreRules";
+import { shouldIgnoreWatchPath, shouldWatchSourcePath } from "./ignoreRules";
 
 export interface EyeWatcherOptions {
   debounceMs?: number;
@@ -79,17 +79,40 @@ export function startWatcher(targetDir: string, options: EyeWatcherOptions = {})
       pollInterval: 50,
       stabilityThreshold: 150
     },
-    ignored: (candidatePath) => shouldIgnoreWatchPath(candidatePath),
+    ignored: (candidatePath, stats) => {
+      const resolvedCandidatePath = path.resolve(candidatePath);
+      if (resolvedCandidatePath === resolvedTargetDir) {
+        return false;
+      }
+
+      const relativeCandidatePath = path.relative(resolvedTargetDir, resolvedCandidatePath) || path.basename(resolvedCandidatePath);
+
+      if (!stats || stats.isDirectory()) {
+        return shouldIgnoreWatchPath(relativeCandidatePath);
+      }
+
+      return !shouldWatchSourcePath(relativeCandidatePath);
+    },
     ignoreInitial: true,
     persistent: true
   });
 
   watcher.on("add", (filePath) => {
+    const relativeFilePath = path.relative(resolvedTargetDir, path.resolve(filePath));
+    if (!shouldWatchSourcePath(relativeFilePath)) {
+      return;
+    }
+
     console.log("[Watcher] Detected save event on:", filePath);
     eventQueue.enqueue(path.resolve(filePath));
   });
 
   watcher.on("change", (filePath) => {
+    const relativeFilePath = path.relative(resolvedTargetDir, path.resolve(filePath));
+    if (!shouldWatchSourcePath(relativeFilePath)) {
+      return;
+    }
+
     console.log("[Watcher] Detected save event on:", filePath);
     eventQueue.enqueue(path.resolve(filePath));
   });

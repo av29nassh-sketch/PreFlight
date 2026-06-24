@@ -32,6 +32,7 @@ export interface PreFlightDaemonHandle {
   socketPath: string;
   targetDir: string;
   websocketUrl: string;
+  alreadyRunning?: boolean;
   close: () => Promise<void>;
 }
 
@@ -51,6 +52,23 @@ export type PreFlightAlertMessage =
       type: "CLEAR";
       filePath: string;
       detectedAt: string;
+    }
+  | {
+      type: "PATCH_RESULT";
+      ok: boolean;
+      filePath?: string;
+      message: string;
+      detectedAt: string;
+    };
+
+type WebSocketClientMessage =
+  | {
+      type: "editor_hello";
+      client?: string;
+    }
+  | {
+      type: "patch_file";
+      filePath: string;
     };
 
 const EMPTY_RESULT: ReleaseGateScanResult = {
@@ -70,6 +88,7 @@ type HardBlockAlert = Extract<PreFlightAlertMessage, { type: "HARD_BLOCK" }>;
 const NOTIFICATION_COOLDOWN_MS = 60_000;
 const PREFLIGHT_NOTIFICATION_ICON = path.resolve(__dirname, "..", "..", "assets", "preflight-notification.png");
 const DAEMON_MANIFEST_FILE = "preflight-daemon.json";
+const DAEMON_PORT_PROBE_MS = 750;
 
 async function countTrackedFiles(targetDir: string): Promise<number> {
   const files = await fg("**/*", {
@@ -150,6 +169,10 @@ function collectHardBlockAlerts(targetDir: string, result: ReleaseGateScanResult
 }
 
 function ensureAbsoluteAlertPath(targetDir: string, message: PreFlightAlertMessage): PreFlightAlertMessage {
+  if (!("filePath" in message) || !message.filePath) {
+    return message;
+  }
+
   return {
     ...message,
     filePath: resolveFindingFilePath(targetDir, message.filePath)
@@ -166,9 +189,72 @@ function getDaemonManifestPath(targetDir: string): string {
   return path.join(targetDir, ".vscode", DAEMON_MANIFEST_FILE);
 }
 
+function readDaemonManifest(targetDir: string): { pid?: number; websocketUrl?: string; targetDir?: string; port?: number } | null {
+  const manifestPath = getDaemonManifestPath(targetDir);
+  try {
+    if (!fs.existsSync(manifestPath)) {
+      return null;
+    }
+
+    return JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function removeDaemonManifest(targetDir: string): void {
+  try {
+    fs.rmSync(getDaemonManifestPath(targetDir), { force: true });
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+function isDaemonUrlReachable(daemonUrl: string, expectedTargetDir?: string): Promise<boolean> {
+  try {
+    const parsed = new URL(daemonUrl);
+    if (!/^wss?:$/.test(parsed.protocol)) {
+      return Promise.resolve(false);
+    }
+  } catch {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    const socket = new WebSocket(daemonUrl);
+    const timeout = setTimeout(() => finish(false), DAEMON_PORT_PROBE_MS);
+    let settled = false;
+    const finish = (reachable: boolean) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timeout);
+      socket.removeAllListeners();
+      socket.terminate();
+      resolve(reachable);
+    };
+
+    socket.once("message", (rawMessage) => {
+      try {
+        const message = JSON.parse(rawMessage.toString("utf8"));
+        const rawTargetDir = message?.targetDir || message?.state?.targetDir;
+        const daemonTargetDir = typeof rawTargetDir === "string" ? path.resolve(rawTargetDir) : null;
+        finish(message?.type === "STATE" && (!expectedTargetDir || daemonTargetDir === path.resolve(expectedTargetDir)));
+      } catch {
+        finish(false);
+      }
+    });
+    socket.once("error", () => finish(false));
+    socket.once("close", () => finish(false));
+  });
+}
+
 export class PreFlightDaemon {
   private clients = new Set<net.Socket>();
   private websocketClients = new Set<WebSocketClient>();
+  private editorWebSocketClients = new Set<WebSocketClient>();
   private server: net.Server | null = null;
   private websocketServer: WebSocketServer | null = null;
   private watcher: EyeWatcherHandle | null = null;
@@ -185,7 +271,7 @@ export class PreFlightDaemon {
   constructor(private readonly options: PreFlightDaemonOptions = {}) {
     this.targetDir = path.resolve(options.targetDir || process.cwd());
     this.socketPath = options.socketPath || getPreflightSocketPath(this.targetDir);
-    this.websocketPort = options.websocketPort ?? Number(process.env.PREFLIGHT_DAEMON_WS_PORT || 9001);
+    this.websocketPort = options.websocketPort ?? Number(process.env.PREFLIGHT_DAEMON_WS_PORT || 0);
     this.websocketUrl = `ws://127.0.0.1:${this.websocketPort}`;
     this.state = {
       targetDir: this.targetDir,
@@ -226,6 +312,7 @@ export class PreFlightDaemon {
       client.close();
     }
     this.websocketClients.clear();
+    this.editorWebSocketClients.clear();
 
     await new Promise<void>((resolve) => {
       if (!this.websocketServer) {
@@ -290,8 +377,15 @@ export class PreFlightDaemon {
         lastHardBlock: this.state.lastHardBlock ? formatHardBlockAlert(this.targetDir, this.state.lastHardBlock) : null,
         detectedAt: new Date().toISOString()
       }));
-      socket.on("close", () => this.websocketClients.delete(socket));
-      socket.on("error", () => this.websocketClients.delete(socket));
+      socket.on("message", (rawMessage) => this.handleWebSocketClientMessage(socket, rawMessage.toString("utf8")));
+      socket.on("close", () => {
+        this.websocketClients.delete(socket);
+        this.editorWebSocketClients.delete(socket);
+      });
+      socket.on("error", () => {
+        this.websocketClients.delete(socket);
+        this.editorWebSocketClients.delete(socket);
+      });
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -307,6 +401,42 @@ export class PreFlightDaemon {
         resolve();
       });
     });
+  }
+
+  private handleWebSocketClientMessage(socket: WebSocketClient, rawMessage: string): void {
+    let message: WebSocketClientMessage;
+    try {
+      message = JSON.parse(rawMessage) as WebSocketClientMessage;
+    } catch {
+      return;
+    }
+
+    if (message.type === "editor_hello") {
+      this.editorWebSocketClients.add(socket);
+      return;
+    }
+
+    if (message.type === "patch_file") {
+      void this.applyPatchForFile(message.filePath)
+        .then(() => {
+          this.sendWebSocket(socket, {
+            type: "PATCH_RESULT",
+            ok: true,
+            filePath: resolveFindingFilePath(this.targetDir, message.filePath),
+            message: "Patch applied. Rescanning...",
+            detectedAt: new Date().toISOString()
+          });
+        })
+        .catch((error) => {
+          this.sendWebSocket(socket, {
+            type: "PATCH_RESULT",
+            ok: false,
+            filePath: resolveFindingFilePath(this.targetDir, message.filePath),
+            message: error instanceof Error ? error.message : String(error),
+            detectedAt: new Date().toISOString()
+          });
+        });
+    }
   }
 
   private writeDaemonManifest(): void {
@@ -377,6 +507,12 @@ export class PreFlightDaemon {
     }
   }
 
+  private sendWebSocket(client: WebSocketClient, message: PreFlightAlertMessage): void {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify(ensureAbsoluteAlertPath(this.targetDir, message)));
+    }
+  }
+
   private broadcastWebSocket(message: PreFlightAlertMessage): void {
     const normalizedMessage = ensureAbsoluteAlertPath(this.targetDir, message);
     const serialized = JSON.stringify(normalizedMessage);
@@ -414,7 +550,7 @@ export class PreFlightDaemon {
     }
 
     const forceWindowsFallback = process.env.PREFLIGHT_FORCE_WINDOWS_POPUP === "1";
-    if (this.websocketClients.size > 0 && !forceWindowsFallback) {
+    if (this.editorWebSocketClients.size > 0 && !forceWindowsFallback) {
       return;
     }
 
@@ -554,9 +690,69 @@ export class PreFlightDaemon {
       });
     }
   }
+
+  private getFindingsForFile(filePath: string): {
+    fuzzFindings: ReleaseFuzzerFinding[];
+    releaseGateFindings: ReleaseGateFinding[];
+  } {
+    const resolvedFilePath = resolveFindingFilePath(this.targetDir, filePath);
+    const sameFile = (candidate: string) => resolveFindingFilePath(this.targetDir, candidate) === resolvedFilePath;
+
+    return {
+      fuzzFindings: this.state.result.fuzzFindings.filter((finding) => sameFile(finding.file)),
+      releaseGateFindings: this.state.result.findings.filter((finding) => sameFile(finding.file))
+    };
+  }
+
+  private async applyPatchForFile(filePath: string): Promise<void> {
+    const resolvedFilePath = resolveFindingFilePath(this.targetDir, filePath);
+    const { fuzzFindings, releaseGateFindings } = this.getFindingsForFile(resolvedFilePath);
+
+    if (fuzzFindings.length === 0 && releaseGateFindings.length === 0) {
+      throw new Error(`No active PreFlight finding found for ${resolvedFilePath}.`);
+    }
+
+    for (const finding of fuzzFindings) {
+      const patched = await remediateFuzzerFinding({
+        ...finding,
+        file: resolvedFilePath
+      });
+
+      if (!patched) {
+        throw new Error(`Fuzzer remediation did not apply a patch for ${resolvedFilePath}.`);
+      }
+    }
+
+    if (releaseGateFindings.length > 0) {
+      await applyAutoPatch(
+        resolvedFilePath,
+        releaseGateFindings.map((finding) => finding.issue)
+      );
+    }
+
+    await this.runScan([resolvedFilePath]);
+  }
 }
 
 export async function startPreFlightDaemon(options: PreFlightDaemonOptions = {}): Promise<PreFlightDaemonHandle> {
+  const targetDir = path.resolve(options.targetDir || process.cwd());
+  const manifest = readDaemonManifest(targetDir);
+  const manifestTargetDir = manifest?.targetDir ? path.resolve(manifest.targetDir) : null;
+
+  if (manifest?.websocketUrl && manifestTargetDir === targetDir) {
+    const isReachable = await isDaemonUrlReachable(manifest.websocketUrl, targetDir);
+    if (isReachable) {
+      return {
+        socketPath: options.socketPath || getPreflightSocketPath(targetDir),
+        targetDir,
+        websocketUrl: manifest.websocketUrl,
+        alreadyRunning: true,
+        close: async () => undefined
+      };
+    }
+  }
+
+  removeDaemonManifest(targetDir);
   const daemon = new PreFlightDaemon(options);
   return daemon.start();
 }

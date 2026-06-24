@@ -11,7 +11,7 @@ import { render } from "ink";
 import { startPreFlightDaemon } from "../daemon/engine";
 import { getPreflightSocketPath } from "../daemon/protocol";
 import { startWatcher } from "../eye/watcher";
-import { runInitWizard } from "../commands/init";
+import { runStart, runWakeup } from "./start";
 import { saveLicenseKey, validateLicenseKey } from "../config/auth";
 import type { ReleaseGateScanResult } from "../release-gate/model";
 import { runReleaseGateScan } from "../release-gate/pipeline";
@@ -207,6 +207,12 @@ export async function runDaemon(targetDir = process.cwd()): Promise<void> {
     targetDir,
     output: process.stderr
   });
+  if (handle.alreadyRunning) {
+    process.stderr.write(`PreFlight daemon already running for ${handle.targetDir}\n`);
+    process.stderr.write(`WebSocket alerts: ${handle.websocketUrl}\n`);
+    return;
+  }
+
   process.stderr.write(`PreFlight daemon running for ${handle.targetDir}\n`);
   process.stderr.write(`IPC socket: ${handle.socketPath}\n`);
   process.stderr.write(`WebSocket alerts: ${handle.websocketUrl}\n`);
@@ -447,10 +453,18 @@ export function createProgram(): Command {
     });
 
   program
-    .command("init")
-    .description("Configure PreFlight MCP for your AI assistant or IDE.")
+    .command("start")
+    .argument("[dir]", "Directory The Eye should watch in the background", process.cwd())
+    .description("Register this workspace and start The Eye as a background daemon.")
+    .action(async (dir: string) => {
+      await runStart(dir);
+    });
+
+  program
+    .command("wakeup", { hidden: true })
+    .description("Restart all registered PreFlight workspace daemons.")
     .action(async () => {
-      await runInitWizard();
+      await runWakeup();
     });
 
   program
