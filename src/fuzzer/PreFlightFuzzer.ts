@@ -96,20 +96,25 @@ function inferKeyFromSourceText(text: string): string[] {
 
 function classifySink(sink: CPGNode): FuzzVulnerabilityType {
   const text = nodeText(sink);
-  if (/sql|select|insert|update|delete|query|execute|rpc|supabase/i.test(text) || sink.sinkKind === "raw-sql-construction") {
-    return "SQL_INJECTION";
-  }
 
-  if (/exec|execSync|spawn|spawnSync|execFile|command|shell/i.test(text) || sink.sinkKind === "command-execution") {
+  if (sink.sinkKind === "command-execution" || /\b(?:exec|execSync|spawn|spawnSync|execFile)\s*\(/i.test(text)) {
     return "COMMAND_INJECTION";
   }
 
-  if (/readFile|writeFile|createReadStream|unlink|path|file/i.test(text)) {
+  if (sink.sinkKind === "file-system" || /\b(?:readFile|writeFile|createReadStream|unlink)\s*\(/i.test(text)) {
     return "PATH_TRAVERSAL";
   }
 
-  if (/auth|role|session|permission|admin/i.test(text)) {
+  if (sink.sinkKind === "auth-boundary" || /auth|role|session|permission|admin/i.test(text)) {
     return "AUTH_BYPASS";
+  }
+
+  if (
+    sink.sinkKind === "raw-sql-construction" ||
+    /\b(?:sql|select|insert|update|delete|rpc|supabase)\b/i.test(text) ||
+    /\b(?:db|pool|client|connection|database)\s*\.\s*(?:query|execute)\s*\(/i.test(text)
+  ) {
+    return "SQL_INJECTION";
   }
 
   return "UNKNOWN_TAINT";

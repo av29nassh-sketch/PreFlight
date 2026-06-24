@@ -154,6 +154,35 @@ app.listen(3000, () => console.log('Server running...'));
     expect(result.fuzzFindings).toHaveLength(0);
   });
 
+  test("classifies inline exec request-query flow as command injection, not SQL injection", async () => {
+    const { runReleaseGateScan } = await import("../src/release-gate/pipeline");
+    const rootDir = makeTempProject({
+      "server.js": `
+const { exec } = require("child_process");
+const express = require("express");
+const app = express();
+
+app.get("/ping", (req, res) => {
+  const ip = req.query.ip;
+  exec("ping " + ip, (err, stdout) => {
+    res.send(stdout);
+  });
+});
+`
+    });
+    roots.push(rootDir);
+
+    const result = await runReleaseGateScan({
+      targetDir: rootDir,
+      eyeActive: true,
+      changedFiles: [path.join(rootDir, "server.js")]
+    });
+
+    expect(result.status).toBe("HARD_BLOCK");
+    expect(result.fuzzFindings.some((finding) => finding.type === "COMMAND_INJECTION")).toBe(true);
+    expect(result.fuzzFindings.some((finding) => finding.type === "SQL_INJECTION")).toBe(false);
+  });
+
   test("downgrades syntax-corrupted source to a soft warning with no hard block", async () => {
     const { runReleaseGateScan } = await import("../src/release-gate/pipeline");
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
