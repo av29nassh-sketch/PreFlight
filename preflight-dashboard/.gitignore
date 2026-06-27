@@ -63,6 +63,7 @@ recordings/
 *.png
 *.jpg
 *.jpeg
+!public/preflight-pro-upi.jpeg
 *.gif
 *.webp
 *.mp4

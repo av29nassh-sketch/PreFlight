@@ -13,6 +13,10 @@ body {
   background: #09090b;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 .technical-grid {
   background-image:
     linear-gradient(to right, rgba(255, 255, 255, 0.035) 1px, transparent 1px),

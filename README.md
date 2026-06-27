@@ -122,6 +122,8 @@ npm run analytics:npm
 - **Solo Pro:** $19/mo for unlimited scans and fixes.
 - **Teams:** $49/seat/mo for team rollout, shared onboarding, and unlimited scans and fixes.
 
+> ⚠️ Beta Architecture & Safety Notice: PreFlight Pro is currently in active Beta. While our local AST daemon is designed to catch severe structural anomalies, hallucinated syntax, and potential Supabase RLS drifts in real-time, it does not guarantee 100% error elimination. AI-assisted code should always be explicitly reviewed by a senior engineer before being pushed to a production environment. Use PreFlight as an advanced automated guardrail, not a replacement for manual code review.
+
 ## Engine Upgrades
 
 PreFlight is now powered by deeper local analysis primitives:
