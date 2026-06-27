@@ -117,6 +117,30 @@ describe("preflight proxy beta license lifecycle", () => {
     expect(expiresAt - activatedAt).toBe(14 * 24 * 60 * 60 * 1000);
   });
 
+  test("first remediation request preserves a pre-seeded lifetime expiry", async () => {
+    const token = "PREFLIGHT-BETA-20260627-LIFETIME1";
+    const lifetimeExpiry = "9999-12-31T23:59:59Z";
+    records.set(token, {
+      key_string: token,
+      activated_at: null,
+      expires_at: lifetimeExpiry
+    });
+
+    const response = await originalFetch(`${baseUrl}/api/v1/remediation`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify({})
+    });
+
+    expect(response.status).toBe(400);
+    const record = records.get(token);
+    expect(record.activated_at).toEqual(expect.any(String));
+    expect(record.expires_at).toBe(lifetimeExpiry);
+  });
+
   test("expired activated beta keys are rejected", async () => {
     const token = "PREFLIGHT-BETA-20260611-LIFECYCLE3";
     records.set(token, {

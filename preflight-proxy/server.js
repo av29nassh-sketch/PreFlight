@@ -139,9 +139,20 @@ async function getBetaKeyRecord(config, token) {
   return Array.isArray(payload) && payload.length > 0 ? payload[0] : null;
 }
 
-async function activateBetaKeyRecord(config, token, now = new Date()) {
+function resolveActivationExpiry(record, now = new Date()) {
+  if (record?.expires_at) {
+    const existingExpiry = new Date(record.expires_at);
+    if (Number.isFinite(existingExpiry.getTime()) && existingExpiry.getTime() > now.getTime()) {
+      return record.expires_at;
+    }
+  }
+
+  return new Date(now.getTime() + BETA_KEY_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
+
+async function activateBetaKeyRecord(config, token, record, now = new Date()) {
   const activatedAt = now.toISOString();
-  const expiresAt = new Date(now.getTime() + BETA_KEY_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const expiresAt = resolveActivationExpiry(record, now);
   const searchParams = new URLSearchParams({
     key_string: `eq.${token}`,
     activated_at: "is.null",
@@ -190,7 +201,15 @@ async function validateOrActivateBetaKey(token, now = new Date()) {
   }
 
   if (record.activated_at == null) {
-    const activatedRecord = await activateBetaKeyRecord(config, token, now);
+    if (record.expires_at && isBetaKeyExpired(record, now)) {
+      return {
+        allowed: false,
+        status: 401,
+        error: "Beta License Expired"
+      };
+    }
+
+    const activatedRecord = await activateBetaKeyRecord(config, token, record, now);
     if (activatedRecord) {
       return {
         allowed: true,
