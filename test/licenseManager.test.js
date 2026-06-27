@@ -8,7 +8,7 @@ const EMAIL_MISMATCH_MESSAGE = "\u274c Email does not match the purchase record.
 const EXHAUSTED_MESSAGE =
   "You have used your 10 free AI/local fixes. To unlock unlimited deep reasoning remediation, upgrade to PreFlight Pro ($19/mo) at https://preflight-vibe.vercel.app/";
 const BETA_ACTIVE_RECEIPT =
-  "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes (Expires 14 days from issue date).";
+  "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes.";
 const ORG_ACCOUNT_MESSAGE =
   "Org account detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator.";
 
@@ -273,7 +273,7 @@ describe("licenseManager", () => {
     });
   });
 
-  test("allows a local beta key for 14 days without calling Lemon Squeezy", async () => {
+  test("allows a local beta key without calling Lemon Squeezy", async () => {
     const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
     const homeDir = makeHome();
     let validated = false;
@@ -297,7 +297,7 @@ describe("licenseManager", () => {
     });
   });
 
-  test("rejects an expired local beta key before any online validation attempt", async () => {
+  test("allows older local beta keys and leaves expiry enforcement to the proxy", async () => {
     const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
     const homeDir = makeHome();
     let validated = false;
@@ -315,9 +315,9 @@ describe("licenseManager", () => {
 
     expect(validated).toBe(false);
     expect(result).toEqual({
-      allowed: false,
+      allowed: true,
       tier: "pro",
-      message: "\u274c Beta license expired. Please request a fresh PreFlight beta key."
+      receipt: BETA_ACTIVE_RECEIPT
     });
   });
 

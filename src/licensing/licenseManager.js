@@ -7,10 +7,8 @@ const CONFIG_DIR = ".preflight";
 const CONFIG_FILE = "config.json";
 const FREE_FIX_LIMIT = 10;
 const BETA_LICENSE_PREFIX = "PREFLIGHT-BETA-";
-const BETA_LICENSE_WINDOW_DAYS = 14;
-const BETA_LICENSE_WINDOW_MS = BETA_LICENSE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 const BETA_LICENSE_ACTIVE_RECEIPT =
-  "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes (Expires 14 days from issue date).";
+  "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes.";
 const TRI_STATE_RISK_SCORE = Object.freeze({
   HARD_BLOCK: Object.freeze({
     icon: "\ud83d\udd34",
@@ -34,8 +32,6 @@ const FREE_FIXES_EXHAUSTED_MESSAGE =
   "You have used your 10 free AI/local fixes. To unlock unlimited deep reasoning remediation, upgrade to PreFlight Pro ($19/mo) at https://preflight-vibe.vercel.app/";
 const INVALID_LICENSE_MESSAGE =
   "\u274c License is inactive or invalid. Please run 'preflight activate <key>' with a valid key.";
-const EXPIRED_BETA_LICENSE_MESSAGE =
-  "\u274c Beta license expired. Please request a fresh PreFlight beta key.";
 const ORG_ACCOUNT_DETECTED_MESSAGE =
   "Org account detected: Enterprise repositories require a PreFlight Teams seat. Please upgrade your license or contact your administrator.";
 const ACTIVATION_MESSAGE = "\u2705 PreFlight Pro activated successfully! Unlimited AI auto-fixes unlocked.";
@@ -178,16 +174,6 @@ function resolveBetaLicensePermission(licenseKey, repositoryContext, now = new D
   const creationDate = parseBetaLicenseCreationDate(licenseKey);
   if (!creationDate) {
     return null;
-  }
-
-  const evaluationDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const ageMs = evaluationDate.getTime() - creationDate.getTime();
-  if (ageMs < 0 || ageMs > BETA_LICENSE_WINDOW_MS) {
-    return {
-      allowed: false,
-      tier: "pro",
-      message: EXPIRED_BETA_LICENSE_MESSAGE
-    };
   }
 
   const boundary = validateRepositoryOwnershipBoundary({

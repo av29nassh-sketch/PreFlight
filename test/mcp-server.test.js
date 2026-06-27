@@ -203,7 +203,7 @@ describe("PreFlight MCP server tools", () => {
       verifyFixPermission: async () => ({
         allowed: true,
         tier: "pro",
-        receipt: "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes (Expires 14 days from issue date)."
+        receipt: "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes."
       })
     });
 
@@ -215,7 +215,7 @@ describe("PreFlight MCP server tools", () => {
         {
           type: "text",
           text:
-            "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes (Expires 14 days from issue date).\n" +
+            "\u26a0\ufe0f Beta License Active \u2014 Unlocked Pro Auto-Fixes.\n" +
             "PreFlight remediation attempted 1 fix(es): 1 applied, 0 skipped, 0 unsupported.\n"
         }
       ]

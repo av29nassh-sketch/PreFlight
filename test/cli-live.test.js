@@ -126,7 +126,8 @@ describe("PreFlight CLI live E2E", () => {
     });
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("⚠️ Beta License Active — Unlocked Pro Auto-Fixes (Expires 14 days from issue date).");
+    expect(result.stdout).toContain("Beta License Active");
+    expect(result.stdout).toContain("Unlocked Pro Auto-Fixes");
     expect(result.stdout).toContain("PreFlight remediation attempted 1 fix(es): 1 applied");
   });
 });

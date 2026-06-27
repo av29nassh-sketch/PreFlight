@@ -440,16 +440,11 @@ export function createProgram(): Command {
 
   program
     .command("scan")
-    .argument("[dir]", "Directory to scan and watch", process.cwd())
+    .argument("[dir]", "Directory to scan", process.cwd())
     .option("--fix", "Run the legacy PreFlight scan --fix remediation engine.")
-    .description("Run The Eye and mount the interactive PreFlight Ink dashboard.")
+    .description("Run a one-shot PreFlight scan.")
     .action(async (dir: string, options: { fix?: boolean }) => {
-      if (options.fix) {
-        await runLegacyScan(dir, { fix: true });
-        return;
-      }
-
-      await runScan(dir);
+      await runLegacyScan(dir, { fix: Boolean(options.fix) });
     });
 
   program
