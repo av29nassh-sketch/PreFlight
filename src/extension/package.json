@@ -2,7 +2,7 @@
   "name": "preflight-companion",
   "displayName": "PreFlight Companion (Beta)",
   "description": "Real-time AI code drift and security guarding for the PreFlight Pro Engine (Beta)",
-  "version": "0.0.4",
+  "version": "0.0.11",
   "publisher": "PreflightPro",
   "icon": "assets/preflight-icon.png",
   "engines": {
