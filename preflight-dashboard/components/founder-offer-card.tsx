@@ -129,9 +129,14 @@ export function FounderOfferCard({ checkoutUrl }: FounderOfferCardProps) {
                     </div>
                   )}
                 </div>
-                <p className="mx-auto mt-5 max-w-md text-sm leading-6 text-emerald-50">
-                  Scan the QR code and transfer exactly ₹2,499. Reply to your receipt email with your transaction ID or screenshot for instant key confirmation.
-                </p>
+                <div className="mx-auto mt-5 max-w-md space-y-3 text-sm leading-6 text-emerald-50">
+                  <p>
+                    📸 Scan & Pay ₹2,499. Once the transfer is complete, please reply to your payment confirmation or email a screenshot/transaction ID to av29nassh@gmail.com
+                  </p>
+                  <p>
+                    ⚡ Founder&apos;s Pass keys for UPI payments are generated manually and will be delivered directly to your inbox within 1 to 2 hours of verification!
+                  </p>
+                </div>
               </div>
             )}
 
