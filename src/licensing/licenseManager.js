@@ -28,6 +28,8 @@ const TRI_STATE_RISK_SCORE = Object.freeze({
 });
 const LEMON_SQUEEZY_ACTIVATE_URL = "https://api.lemonsqueezy.com/v1/licenses/activate";
 const LEMON_SQUEEZY_VALIDATE_URL = "https://api.lemonsqueezy.com/v1/licenses/validate";
+const PREFLIGHT_AUTH_VALIDATE_ENDPOINT = "https://preflight-proxy.vercel.app/api/v1/license/validate";
+const PREFLIGHT_AUTH_VALIDATE_TIMEOUT_MS = 8000;
 const FREE_FIXES_EXHAUSTED_MESSAGE =
   "You have used your 10 free AI/local fixes. To unlock unlimited deep reasoning remediation, upgrade to PreFlight Pro ($19/mo) at https://preflight-vibe.vercel.app/";
 const INVALID_LICENSE_MESSAGE =
@@ -170,8 +172,48 @@ function parseBetaLicenseCreationDate(licenseKey) {
   return creationDate;
 }
 
-function resolveBetaLicensePermission(licenseKey, repositoryContext, now = new Date()) {
+function parseBetaLicenseKey(licenseKey) {
   const creationDate = parseBetaLicenseCreationDate(licenseKey);
+  if (!creationDate) {
+    return null;
+  }
+
+  return creationDate;
+}
+
+async function validateBetaLicenseKey(licenseKey, options = {}) {
+  const requestBetaLicenseValidation = options.requestBetaLicenseValidation || defaultBetaLicenseValidationRequest;
+  return requestBetaLicenseValidation({
+    url: options.authValidateEndpoint || process.env.PREFLIGHT_AUTH_VALIDATE_ENDPOINT || PREFLIGHT_AUTH_VALIDATE_ENDPOINT,
+    licenseKey
+  });
+}
+
+async function defaultBetaLicenseValidationRequest({ url, licenseKey }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PREFLIGHT_AUTH_VALIDATE_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${licenseKey}`,
+        "X-PreFlight-Pro-Key": licenseKey
+      },
+      body: JSON.stringify({}),
+      signal: controller.signal
+    });
+
+    return { valid: response.ok };
+  } catch {
+    return { valid: false };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function resolveBetaLicensePermission(licenseKey, repositoryContext, options = {}) {
+  const creationDate = parseBetaLicenseKey(licenseKey);
   if (!creationDate) {
     return null;
   }
@@ -180,8 +222,25 @@ function resolveBetaLicensePermission(licenseKey, repositoryContext, now = new D
     repositoryContext,
     tier: "pro"
   });
+  if (boundary) {
+    return boundary;
+  }
 
-  return boundary || {
+  let validation;
+  try {
+    validation = await validateBetaLicenseKey(licenseKey, options);
+  } catch {
+    validation = { valid: false };
+  }
+  if (!validation?.valid) {
+    return {
+      allowed: false,
+      tier: "pro",
+      message: INVALID_LICENSE_MESSAGE
+    };
+  }
+
+  return {
     allowed: true,
     tier: "pro",
     receipt: BETA_LICENSE_ACTIVE_RECEIPT
@@ -474,8 +533,18 @@ async function verifyFixPermission(options = {}) {
     return freeBoundary || freePermission(config);
   }
 
-  const betaPermission = resolveBetaLicensePermission(configuredLicenseKey, repositoryContext, new Date());
+  const betaPermission = await resolveBetaLicensePermission(configuredLicenseKey, repositoryContext, options);
   if (betaPermission) {
+    if (!betaPermission.allowed && config.licenseKey === configuredLicenseKey) {
+      await writeConfig(
+        {
+          ...config,
+          licenseKey: null,
+          instanceId: null
+        },
+        options
+      );
+    }
     return betaPermission;
   }
 

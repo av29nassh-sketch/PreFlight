@@ -90,11 +90,20 @@ describe("PreFlight E2E security pipeline", () => {
       "}",
       ""
     ].join("\n");
-    let capturedUrl = "";
+    const capturedUrls: string[] = [];
     let capturedBody: any;
 
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
-      capturedUrl = String(url);
+      const requestUrl = String(url);
+      capturedUrls.push(requestUrl);
+
+      if (requestUrl.includes("/api/v1/license/validate")) {
+        return new Response(JSON.stringify({ valid: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
       capturedBody = JSON.parse(String(init?.body));
       return new Response(JSON.stringify({ code: patchedRoute }), {
         status: 200,
@@ -105,8 +114,11 @@ describe("PreFlight E2E security pipeline", () => {
     const remediated = await remediateFuzzerFinding(toRemediationFinding(hardBlock));
 
     expect(remediated).toBe(true);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(capturedUrl).toBe("https://preflight-proxy.vercel.app/api/v1/remediation");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(capturedUrls).toEqual([
+      "https://preflight-proxy.vercel.app/api/v1/license/validate",
+      "https://preflight-proxy.vercel.app/api/v1/remediation"
+    ]);
     expect(capturedBody).toMatchObject({
       filePath: routeFile,
       vulnerabilityType: "SQL_INJECTION",

@@ -2,6 +2,7 @@
 const AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
 import { exec } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -69,6 +70,23 @@ function runCli(command, options = {}) {
   });
 }
 
+function startAuthValidateServer(statusCode = 200) {
+  const server = http.createServer((_req, res) => {
+    res.writeHead(statusCode, { "content-type": "application/json" });
+    res.end(JSON.stringify(statusCode >= 200 && statusCode < 300 ? { valid: true } : { error: "Unauthorized" }));
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      resolve({
+        close: () => new Promise((closeResolve) => server.close(closeResolve)),
+        url: `http://127.0.0.1:${address.port}/api/v1/license/validate`
+      });
+    });
+  });
+}
+
 describe("PreFlight CLI live E2E", () => {
   beforeAll(() => {
     if (fs.existsSync(rootPolicyPath)) {
@@ -117,17 +135,23 @@ describe("PreFlight CLI live E2E", () => {
 
   test("CLI prints the beta license receipt before running auto-fixes", async () => {
     resetDemoFixture();
+    const authServer = await startAuthValidateServer();
 
-    const result = await runCli("node index.js scan ./demo-live-test --fix", {
-      input: "y\n",
-      env: {
-        PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260611-TEST"
-      }
-    });
+    try {
+      const result = await runCli("node index.js scan ./demo-live-test --fix", {
+        input: "y\n",
+        env: {
+          PREFLIGHT_AUTH_VALIDATE_ENDPOINT: authServer.url,
+          PREFLIGHT_PRO_KEY: "PREFLIGHT-BETA-20260611-TEST"
+        }
+      });
 
-    expect(result.code).toBe(0);
-    expect(result.stdout).toContain("Beta License Active");
-    expect(result.stdout).toContain("Unlocked Pro Auto-Fixes");
-    expect(result.stdout).toContain("PreFlight remediation attempted 1 fix(es): 1 applied");
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("Beta License Active");
+      expect(result.stdout).toContain("Unlocked Pro Auto-Fixes");
+      expect(result.stdout).toContain("PreFlight remediation attempted 1 fix(es): 1 applied");
+    } finally {
+      await authServer.close();
+    }
   });
 });

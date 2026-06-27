@@ -273,10 +273,11 @@ describe("licenseManager", () => {
     });
   });
 
-  test("allows a local beta key without calling Lemon Squeezy", async () => {
+  test("allows a locally configured beta key after proxy validation without calling Lemon Squeezy", async () => {
     const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
     const homeDir = makeHome();
-    let validated = false;
+    let lemonSqueezyValidated = false;
+    let betaValidated = false;
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-10T00:00:00.000Z"));
     await writeConfig({ freeFixesUsed: 5, licenseKey: "PREFLIGHT-BETA-20260529-TEST", instanceId: null }, { homeDir });
@@ -284,12 +285,17 @@ describe("licenseManager", () => {
     const result = await verifyFixPermission({
       homeDir,
       requestLicenseValidation: async () => {
-        validated = true;
+        lemonSqueezyValidated = true;
+        return { valid: true };
+      },
+      requestBetaLicenseValidation: async () => {
+        betaValidated = true;
         return { valid: true };
       }
     });
 
-    expect(validated).toBe(false);
+    expect(lemonSqueezyValidated).toBe(false);
+    expect(betaValidated).toBe(true);
     expect(result).toEqual({
       allowed: true,
       tier: "pro",
@@ -300,7 +306,8 @@ describe("licenseManager", () => {
   test("allows older local beta keys and leaves expiry enforcement to the proxy", async () => {
     const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
     const homeDir = makeHome();
-    let validated = false;
+    let lemonSqueezyValidated = false;
+    let betaValidated = false;
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-10T00:00:00.000Z"));
     await writeConfig({ freeFixesUsed: 5, licenseKey: "PREFLIGHT-BETA-20260520-TEST", instanceId: null }, { homeDir });
@@ -308,16 +315,62 @@ describe("licenseManager", () => {
     const result = await verifyFixPermission({
       homeDir,
       requestLicenseValidation: async () => {
-        validated = true;
+        lemonSqueezyValidated = true;
+        return { valid: true };
+      },
+      requestBetaLicenseValidation: async () => {
+        betaValidated = true;
         return { valid: true };
       }
     });
 
-    expect(validated).toBe(false);
+    expect(lemonSqueezyValidated).toBe(false);
+    expect(betaValidated).toBe(true);
     expect(result).toEqual({
       allowed: true,
       tier: "pro",
       receipt: BETA_ACTIVE_RECEIPT
+    });
+  });
+
+  test("rejects an unseeded beta-format key and clears it from local config", async () => {
+    const { readConfig, verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
+    const homeDir = makeHome();
+    await writeConfig({ freeFixesUsed: 10, licenseKey: "PREFLIGHT-BETA-20990101-UNSEEDED", instanceId: null }, { homeDir });
+
+    const result = await verifyFixPermission({
+      homeDir,
+      requestBetaLicenseValidation: async () => ({ valid: false })
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      tier: "pro",
+      message: "❌ License is inactive or invalid. Please run 'preflight activate <key>' with a valid key."
+    });
+    await expect(readConfig({ homeDir })).resolves.toMatchObject({
+      freeFixesUsed: 10,
+      licenseKey: null,
+      instanceId: null
+    });
+  });
+
+  test("fails closed when beta key proxy validation errors", async () => {
+    const { verifyFixPermission, writeConfig } = require("../src/licensing/licenseManager");
+    const homeDir = makeHome();
+    await writeConfig({ freeFixesUsed: 10, licenseKey: "PREFLIGHT-BETA-20990101-OFFLINE", instanceId: null }, { homeDir });
+
+    const result = await verifyFixPermission({
+      homeDir,
+      requestBetaLicenseValidation: async () => {
+        throw new Error("network down");
+      }
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      tier: "pro",
+      message: "❌ License is inactive or invalid. Please run 'preflight activate <key>' with a valid key."
     });
   });
 

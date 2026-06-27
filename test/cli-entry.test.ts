@@ -33,10 +33,20 @@ describe("PreFlight CLI entry", () => {
 
     await fs.mkdir(targetDir, { recursive: true });
     await fs.writeFile(path.join(targetDir, "safe.js"), "const safe = true;\n");
+    const homeDir = path.join(workspaceDir, "home");
 
     const result = spawnSync(process.execPath, [cliPath, "scan", ".", "--fix"], {
       cwd: targetDir,
       encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+        PREFLIGHT_HOME: homeDir,
+        PREFLIGHT_PRO_KEY: "",
+        PREFLIGHT_PRO_LICENSE_KEY: "",
+        PREFLIGHT_TEAMS_KEY: ""
+      },
       timeout: 30000
     });
 
