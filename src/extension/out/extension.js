@@ -153,11 +153,22 @@ function resolvePatchResult(message) {
     }
 }
 function getWorkspaceRoot() {
+    const activeDocumentUri = vscode.window.activeTextEditor?.document.uri;
+    if (activeDocumentUri) {
+        const activeWorkspace = vscode.workspace.getWorkspaceFolder(activeDocumentUri);
+        if (activeWorkspace) {
+            return activeWorkspace.uri.fsPath;
+        }
+    }
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
 }
 function getDaemonManifestPath() {
     const workspaceRoot = getWorkspaceRoot();
     return workspaceRoot ? path.join(workspaceRoot, '.vscode', PREFLIGHT_DAEMON_MANIFEST) : null;
+}
+function normalizeFsPathForCompare(filePath) {
+    const resolved = path.resolve(filePath);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 function isDaemonUrlReachable(daemonUrl, expectedTargetDir) {
     try {
@@ -172,6 +183,7 @@ function isDaemonUrlReachable(daemonUrl, expectedTargetDir) {
     return new Promise((resolve) => {
         const socket = new WebSocket(daemonUrl);
         const timeout = setTimeout(() => finish(false), DAEMON_PORT_PROBE_MS);
+        let openFallbackTimeout;
         let settled = false;
         const finish = (reachable) => {
             if (settled) {
@@ -179,6 +191,9 @@ function isDaemonUrlReachable(daemonUrl, expectedTargetDir) {
             }
             settled = true;
             clearTimeout(timeout);
+            if (openFallbackTimeout) {
+                clearTimeout(openFallbackTimeout);
+            }
             socket.removeAllListeners();
             socket.terminate();
             resolve(reachable);
@@ -188,12 +203,24 @@ function isDaemonUrlReachable(daemonUrl, expectedTargetDir) {
                 const message = JSON.parse(rawMessage.toString());
                 const rawTargetDir = message?.targetDir || message?.state?.targetDir;
                 const daemonTargetDir = typeof rawTargetDir === 'string'
-                    ? path.resolve(rawTargetDir)
+                    ? normalizeFsPathForCompare(rawTargetDir)
                     : null;
-                finish(message?.type === 'STATE' && (!expectedTargetDir || daemonTargetDir === path.resolve(expectedTargetDir)));
+                finish(message?.type === 'STATE' && (!expectedTargetDir || daemonTargetDir === normalizeFsPathForCompare(expectedTargetDir)));
             }
             catch {
                 finish(false);
+            }
+        });
+        socket.once('open', () => {
+            openFallbackTimeout = setTimeout(() => finish(true), Math.max(150, Math.floor(DAEMON_PORT_PROBE_MS / 2)));
+            try {
+                socket.send(JSON.stringify({
+                    type: 'editor_probe',
+                    expectedTargetDir
+                }));
+            }
+            catch {
+                // The open fallback still proves the daemon is alive.
             }
         });
         socket.once('error', () => finish(false));
@@ -217,19 +244,14 @@ async function readWorkspaceDaemonUrl() {
         const rawManifest = await fs.readFile(manifestPath, 'utf8');
         const manifest = JSON.parse(rawManifest);
         const workspaceRoot = getWorkspaceRoot();
-        const targetDir = typeof manifest.targetDir === 'string' ? path.resolve(manifest.targetDir) : null;
-        if (workspaceRoot && targetDir && targetDir !== path.resolve(workspaceRoot)) {
+        const targetDir = typeof manifest.targetDir === 'string' ? normalizeFsPathForCompare(manifest.targetDir) : null;
+        if (workspaceRoot && targetDir && targetDir !== normalizeFsPathForCompare(workspaceRoot)) {
             return null;
         }
         const daemonUrl = typeof manifest.websocketUrl === 'string' && manifest.websocketUrl.trim()
             ? manifest.websocketUrl.trim()
             : null;
         if (!daemonUrl) {
-            return null;
-        }
-        const isReachable = await isDaemonUrlReachable(daemonUrl, workspaceRoot || undefined);
-        if (!isReachable) {
-            await removeStaleDaemonManifest(manifestPath);
             return null;
         }
         return daemonUrl;
@@ -292,7 +314,7 @@ async function promptInstallCli() {
     }
     const terminal = vscode.window.createTerminal('PreFlight Setup');
     terminal.show();
-    terminal.sendText('npm install -g preflight-pro && preflight start');
+    terminal.sendText('npm install -g preflight-pro; preflight start');
 }
 function startManagedDaemon(extensionPath) {
     if (managedDaemon && !managedDaemon.killed) {
@@ -318,7 +340,7 @@ function startManagedDaemon(extensionPath) {
     managedDaemon.once('exit', (code) => {
         managedDaemon = null;
         if (code && code !== 0) {
-            void promptInstallCli();
+            console.warn(`PreFlight managed daemon exited with code ${code}. The extension will keep trying to reconnect.`);
         }
     });
     managedDaemon.once('error', (error) => {
@@ -331,8 +353,45 @@ function startManagedDaemon(extensionPath) {
     });
 }
 function activate(context) {
+    const outputChannel = vscode.window.createOutputChannel('PreFlight');
+    context.subscriptions.push(outputChannel);
+    const logConnection = (message) => {
+        outputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
+    };
+    logConnection(`Extension activated. Workspace root: ${getWorkspaceRoot() || '<none>'}`);
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('preflight');
     context.subscriptions.push(diagnosticCollection);
+    const connectionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 101);
+    connectionStatusBarItem.name = 'PreFlight Connection';
+    connectionStatusBarItem.command = 'preflight.showOutput';
+    context.subscriptions.push(connectionStatusBarItem);
+    context.subscriptions.push(vscode.commands.registerCommand('preflight.showOutput', () => {
+        outputChannel.show(true);
+    }));
+    const updateConnectionStatus = (state, daemonUrl) => {
+        if (state === 'connected') {
+            connectionStatusBarItem.text = '$(shield) PreFlight: Watching';
+            connectionStatusBarItem.tooltip = `The Eye is connected to this workspace${daemonUrl ? ` (${daemonUrl})` : ''}. Native popup fallback is suppressed while the VS Code Companion is attached.`;
+            connectionStatusBarItem.backgroundColor = undefined;
+        }
+        else if (state === 'missing-cli') {
+            connectionStatusBarItem.text = '$(error) PreFlight: CLI missing';
+            connectionStatusBarItem.tooltip = 'Install the PreFlight CLI to enable local scanning.';
+            connectionStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+        }
+        else if (state === 'reconnecting') {
+            connectionStatusBarItem.text = '$(sync~spin) PreFlight: Reconnecting';
+            connectionStatusBarItem.tooltip = 'Waiting for the local PreFlight daemon to reconnect.';
+            connectionStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+        }
+        else {
+            connectionStatusBarItem.text = '$(sync~spin) PreFlight: Connecting';
+            connectionStatusBarItem.tooltip = 'Starting or discovering the local PreFlight daemon for this workspace.';
+            connectionStatusBarItem.backgroundColor = undefined;
+        }
+        connectionStatusBarItem.show();
+    };
+    updateConnectionStatus('connecting');
     const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
     statusBarItem.name = 'PreFlight';
     statusBarItem.tooltip = 'PreFlight detected security issues. Click to fix the current file.';
@@ -363,6 +422,16 @@ function activate(context) {
     let reconnectTimer = null;
     let daemonStartAttempted = false;
     let disposed = false;
+    const scheduleReconnect = (attempt) => {
+        if (disposed || reconnectTimer) {
+            return;
+        }
+        const delay = Math.min(DAEMON_RECONNECT_MS * Math.max(1, attempt + 1), 5000);
+        reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            void connectToDaemon(attempt + 1);
+        }, delay);
+    };
     // 1. The Lightbulb (Strictly filtered to PreFlight)
     vscode.languages.registerCodeActionsProvider({ scheme: 'file' }, {
         provideCodeActions(document, range, context) {
@@ -420,6 +489,39 @@ function activate(context) {
             await verifiedClear;
         }).then(() => vscode.window.showInformationMessage('Vulnerability remediated by PreFlight AI.'), (error) => vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error)));
     });
+    const renderHardBlockAlert = async (alert) => {
+        const uri = vscode.Uri.file(alert.filePath);
+        const document = await vscode.workspace.openTextDocument(uri);
+        const targetLine = Math.max(0, (alert.line ?? 1) - 1);
+        const safeLine = Math.min(targetLine, document.lineCount - 1);
+        const lineRange = document.lineAt(safeLine).range;
+        const diagnostic = new vscode.Diagnostic(lineRange, alert.message || 'PreFlight vulnerability detected', vscode.DiagnosticSeverity.Error);
+        diagnostic.source = 'PreFlight';
+        diagnostic.code = 'preflight-hard-block';
+        upsertAlert(uri, alert);
+        diagnosticCollection.set(uri, upsertDiagnostic(uri, diagnostic));
+        updateStatusBar(uri);
+        scheduleConsolidatedPopup(uri, lineRange);
+        console.log('PreFlight squiggle deployed:', uri.fsPath);
+    };
+    const clearFileAlert = (filePath) => {
+        const uri = vscode.Uri.file(filePath);
+        const uriKey = uri.toString();
+        const resolvers = pendingVerificationResolvers.get(uriKey) || [];
+        pendingVerificationResolvers.delete(uriKey);
+        for (const resolve of resolvers) {
+            resolve();
+        }
+        diagnosticCollection.delete(uri);
+        diagnosticsByUri.delete(uriKey);
+        diagnosticObjectsByUri.delete(uriKey);
+        updateStatusBar();
+        const pendingTimer = pendingAlertPopups.get(uriKey);
+        if (pendingTimer) {
+            clearTimeout(pendingTimer);
+            pendingAlertPopups.delete(uriKey);
+        }
+    };
     const handleWebSocketMessage = async (data) => {
         const message = JSON.parse(data.toString());
         console.log('PreFlight WebSocket received:', message);
@@ -427,42 +529,20 @@ function activate(context) {
             resolvePatchResult(message);
             return;
         }
+        if (message.type === 'STATE') {
+            if (message.lastHardBlock) {
+                await renderHardBlockAlert(message.lastHardBlock);
+            }
+            return;
+        }
         if (message.type === 'CLEAR' && message.filePath) {
-            const uri = vscode.Uri.file(message.filePath);
-            const uriKey = uri.toString();
-            const resolvers = pendingVerificationResolvers.get(uriKey) || [];
-            pendingVerificationResolvers.delete(uriKey);
-            for (const resolve of resolvers) {
-                resolve();
-            }
-            diagnosticCollection.delete(uri);
-            diagnosticsByUri.delete(uriKey);
-            diagnosticObjectsByUri.delete(uriKey);
-            updateStatusBar();
-            const pendingTimer = pendingAlertPopups.get(uriKey);
-            if (pendingTimer) {
-                clearTimeout(pendingTimer);
-                pendingAlertPopups.delete(uriKey);
-            }
+            clearFileAlert(message.filePath);
             return;
         }
         if (message.type !== 'HARD_BLOCK')
             return;
         try {
-            const alert = message;
-            const uri = vscode.Uri.file(alert.filePath);
-            const document = await vscode.workspace.openTextDocument(uri);
-            const targetLine = Math.max(0, (alert.line ?? 1) - 1);
-            const safeLine = Math.min(targetLine, document.lineCount - 1);
-            const lineRange = document.lineAt(safeLine).range;
-            const diagnostic = new vscode.Diagnostic(lineRange, alert.message || 'PreFlight vulnerability detected', vscode.DiagnosticSeverity.Error);
-            diagnostic.source = 'PreFlight';
-            diagnostic.code = 'preflight-hard-block';
-            upsertAlert(uri, alert);
-            diagnosticCollection.set(uri, upsertDiagnostic(uri, diagnostic));
-            updateStatusBar(uri);
-            scheduleConsolidatedPopup(uri, lineRange);
-            console.log('PreFlight squiggle deployed:', uri.fsPath);
+            await renderHardBlockAlert(message);
         }
         catch (error) {
             console.error('PreFlight Error:', error);
@@ -473,42 +553,70 @@ function activate(context) {
         if (disposed) {
             return;
         }
-        const daemonUrl = process.env.PREFLIGHT_DAEMON_URL?.trim() || await readWorkspaceDaemonUrl();
-        if (!daemonUrl) {
-            if (!daemonStartAttempted) {
-                daemonStartAttempted = true;
-                startManagedDaemon(context.extensionPath);
-            }
-            if (attempt < DAEMON_RECONNECT_LIMIT) {
-                reconnectTimer = setTimeout(() => {
-                    void connectToDaemon(attempt + 1);
-                }, DAEMON_RECONNECT_MS);
-            }
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
             return;
         }
-        ws = new WebSocket(daemonUrl);
-        ws.on('open', () => {
+        const workspaceDaemonUrl = await readWorkspaceDaemonUrl();
+        const envDaemonUrl = process.env.PREFLIGHT_DAEMON_URL?.trim();
+        const daemonUrl = workspaceDaemonUrl || (envDaemonUrl && await isDaemonUrlReachable(envDaemonUrl, getWorkspaceRoot() || undefined) ? envDaemonUrl : null);
+        logConnection(`Connect attempt ${attempt}. workspaceDaemonUrl=${workspaceDaemonUrl || '<none>'} envDaemonUrl=${envDaemonUrl ? '<set>' : '<none>'} selected=${daemonUrl || '<none>'}`);
+        if (!daemonUrl) {
+            updateConnectionStatus(attempt === 0 ? 'connecting' : 'reconnecting');
+            if (!daemonStartAttempted) {
+                daemonStartAttempted = true;
+                logConnection('No reachable daemon manifest found. Starting managed daemon.');
+                startManagedDaemon(context.extensionPath);
+            }
+            scheduleReconnect(attempt);
+            return;
+        }
+        updateConnectionStatus('connecting');
+        const socket = new WebSocket(daemonUrl);
+        ws = socket;
+        socket.on('open', () => {
+            if (ws !== socket) {
+                return;
+            }
             console.log('PreFlight daemon connected.');
+            logConnection(`WebSocket open: ${daemonUrl}`);
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+            updateConnectionStatus('connected', daemonUrl);
+            daemonStartAttempted = false;
             ws?.send(JSON.stringify({
                 type: 'editor_hello',
                 client: 'vscode'
             }));
         });
-        ws.on('message', handleWebSocketMessage);
-        ws.on('error', () => {
-            if (!daemonStartAttempted) {
-                daemonStartAttempted = true;
-                startManagedDaemon(context.extensionPath);
-            }
-        });
-        ws.on('close', () => {
-            if (disposed || attempt >= DAEMON_RECONNECT_LIMIT) {
+        socket.on('message', handleWebSocketMessage);
+        socket.on('error', (error) => {
+            if (ws !== socket) {
                 return;
             }
+            logConnection(`WebSocket error: ${error instanceof Error ? error.message : String(error)}`);
+            updateConnectionStatus('reconnecting');
+            if (!daemonStartAttempted) {
+                daemonStartAttempted = true;
+                logConnection('WebSocket errored. Starting managed daemon fallback.');
+                startManagedDaemon(context.extensionPath);
+            }
+            ws = null;
+            scheduleReconnect(attempt);
+        });
+        socket.on('close', (code, reason) => {
+            if (ws !== socket) {
+                return;
+            }
+            logConnection(`WebSocket close: code=${code} reason=${reason?.toString() || '<none>'}`);
+            if (disposed) {
+                return;
+            }
+            updateConnectionStatus('reconnecting');
+            ws = null;
             daemonStartAttempted = false;
-            reconnectTimer = setTimeout(() => {
-                void connectToDaemon(attempt + 1);
-            }, DAEMON_RECONNECT_MS);
+            scheduleReconnect(attempt);
         });
     };
     void connectToDaemon();

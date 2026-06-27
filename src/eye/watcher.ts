@@ -79,6 +79,9 @@ export function startWatcher(targetDir: string, options: EyeWatcherOptions = {})
       pollInterval: 50,
       stabilityThreshold: 150
     },
+    usePolling: process.platform === "win32",
+    interval: 300,
+    binaryInterval: 1000,
     ignored: (candidatePath, stats) => {
       const resolvedCandidatePath = path.resolve(candidatePath);
       if (resolvedCandidatePath === resolvedTargetDir) {
@@ -103,8 +106,12 @@ export function startWatcher(targetDir: string, options: EyeWatcherOptions = {})
       return;
     }
 
-    console.log("[Watcher] Detected save event on:", filePath);
     eventQueue.enqueue(path.resolve(filePath));
+    try {
+      output.write(`[Watcher] Detected save event on: ${filePath}\n`);
+    } catch {
+      // Logging must never prevent the daemon from scanning.
+    }
   });
 
   watcher.on("change", (filePath) => {
@@ -113,8 +120,12 @@ export function startWatcher(targetDir: string, options: EyeWatcherOptions = {})
       return;
     }
 
-    console.log("[Watcher] Detected save event on:", filePath);
     eventQueue.enqueue(path.resolve(filePath));
+    try {
+      output.write(`[Watcher] Detected save event on: ${filePath}\n`);
+    } catch {
+      // Logging must never prevent the daemon from scanning.
+    }
   });
 
   watcher.on("error", (error) => {

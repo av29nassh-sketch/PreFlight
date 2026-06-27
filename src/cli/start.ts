@@ -1,4 +1,5 @@
 import childProcess from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -151,6 +152,9 @@ export async function setupUserAutostart(options: StartupRegistrationOptions = {
 
 export function spawnDetachedDaemon(workspaceDir = process.cwd()): childProcess.ChildProcess {
   const resolvedWorkspace = path.resolve(workspaceDir);
+  const logDir = getPreflightConfigDir();
+  fsSync.mkdirSync(logDir, { recursive: true });
+  const logFd = fsSync.openSync(path.join(logDir, "daemon.log"), "a");
   const child = childProcess.spawn(process.execPath, [getCliEntrypoint(), "daemon", "."], {
     cwd: resolvedWorkspace,
     detached: true,
@@ -158,7 +162,7 @@ export function spawnDetachedDaemon(workspaceDir = process.cwd()): childProcess.
       ...process.env,
       PREFLIGHT_DAEMON_WS_PORT: "0"
     },
-    stdio: "ignore",
+    stdio: ["ignore", logFd, logFd],
     windowsHide: true
   });
   child.once("error", (error) => {

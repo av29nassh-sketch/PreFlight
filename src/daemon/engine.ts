@@ -413,6 +413,7 @@ export class PreFlightDaemon {
 
     if (message.type === "editor_hello") {
       this.editorWebSocketClients.add(socket);
+      this.writeLog(`[PreFlight] VS Code client attached. Native popup fallback suppressed.`);
       return;
     }
 
@@ -523,6 +524,14 @@ export class PreFlightDaemon {
     }
   }
 
+  private writeLog(message: string): void {
+    try {
+      (this.options.output || process.stderr).write(`${message}\n`);
+    } catch {
+      // Logging should never be able to crash the daemon.
+    }
+  }
+
   private logHardBlock(alert: HardBlockAlert): void {
     const relativeFile = path.relative(this.targetDir, alert.filePath) || path.basename(alert.filePath);
     const line = alert.line ? `:${alert.line}` : "";
@@ -551,6 +560,7 @@ export class PreFlightDaemon {
 
     const forceWindowsFallback = process.env.PREFLIGHT_FORCE_WINDOWS_POPUP === "1";
     if (this.editorWebSocketClients.size > 0 && !forceWindowsFallback) {
+      this.writeLog(`[PreFlight] HARD_BLOCK routed to ${this.editorWebSocketClients.size} IDE client(s). Native popup skipped.`);
       return;
     }
 
