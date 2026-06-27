@@ -62,6 +62,7 @@ recordings/
 *.png
 *.jpg
 *.jpeg
+!public/preflight-pro-upi.jpeg
 *.gif
 *.webp
 !public/preflight-notification.png
