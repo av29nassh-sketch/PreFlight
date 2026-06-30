@@ -204,6 +204,7 @@ const SERVICE_ROLE_SECRET_PATTERNS = [
 ];
 const SECRET_IDENTIFIER_NAME_PATTERN = /key|secret|token|password/i;
 const DATABASE_URL_PATTERN = /^(?:postgresql|postgres|mysql|mongodb\+srv):\/\/\S+/i;
+const LOCAL_DEVELOPMENT_HOST_PATTERN = /^(?:localhost|127(?:\.\d{1,3}){3}|\[?::1\]?|0\.0\.0\.0)$/i;
 const SERVICE_ROLE_NAME_PATTERN = /(?:^|[_-])(?:supabase[_-]?)?service[_-]?role(?:[_-]?key)?(?:$|[_-])/i;
 const SARIF_REPORT_NAME = "preflight-report.sarif";
 const SARIF_RULES = {
@@ -835,6 +836,289 @@ function detectDatabaseUrl(value) {
   return typeof value === "string" && DATABASE_URL_PATTERN.test(value) ? "database connection string" : null;
 }
 
+function secretEvidenceForValue(value) {
+  const credential = detectCredential(value);
+  const evidence = credential?.label || detectSecret(value);
+  return evidence ? { credential, evidence, value } : null;
+}
+
+function isLocalDevelopmentUrl(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const hasProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed);
+  const candidate = hasProtocol ? trimmed : `http://${trimmed}`;
+
+  try {
+    const parsed = new URL(candidate);
+    return LOCAL_DEVELOPMENT_HOST_PATTERN.test(parsed.hostname);
+  } catch {
+    return /^(?:https?:\/\/)?(?:localhost|127(?:\.\d{1,3}){3}|\[?::1\]?|0\.0\.0\.0)(?::\d{1,5})?(?:[/?#]|$)/i.test(trimmed);
+  }
+}
+
+function callArgumentNodes(callNode) {
+  const argsNode = childForField(callNode, "arguments");
+  if (!argsNode) {
+    return [];
+  }
+
+  const args = [];
+  for (let index = 0; index < argsNode.namedChildCount; index += 1) {
+    const child = argsNode.namedChild(index);
+    if (child) {
+      args.push(child);
+    }
+  }
+  return args;
+}
+
+function splitTopLevelCommaSeparated(text) {
+  const parts = [];
+  let current = "";
+  let depth = 0;
+  let quote = null;
+
+  for (let index = 0; index < String(text || "").length; index += 1) {
+    const char = text[index];
+    const previous = text[index - 1];
+
+    if (quote) {
+      current += char;
+      if (char === quote && previous !== "\\") {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === "'" || char === "\"" || char === "`") {
+      quote = char;
+      current += char;
+      continue;
+    }
+
+    if (char === "{" || char === "[" || char === "(") {
+      depth += 1;
+    } else if (char === "}" || char === "]" || char === ")") {
+      depth = Math.max(0, depth - 1);
+    }
+
+    if (char === "," && depth === 0) {
+      parts.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.trim() || String(text || "").endsWith(",")) {
+    parts.push(current.trim());
+  }
+
+  return parts;
+}
+
+function findTopLevelColon(text) {
+  let depth = 0;
+  let quote = null;
+
+  for (let index = 0; index < String(text || "").length; index += 1) {
+    const char = text[index];
+    const previous = text[index - 1];
+
+    if (quote) {
+      if (char === quote && previous !== "\\") {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === "'" || char === "\"" || char === "`") {
+      quote = char;
+      continue;
+    }
+
+    if (char === "{" || char === "[" || char === "(") {
+      depth += 1;
+    } else if (char === "}" || char === "]" || char === ")") {
+      depth = Math.max(0, depth - 1);
+    }
+
+    if (char === ":" && depth === 0) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function stripPatternDefault(text) {
+  return String(text || "").split("=")[0].trim();
+}
+
+function normalizeObjectPatternKey(text) {
+  const trimmed = String(text || "").trim();
+  if (/^["'`]/.test(trimmed)) {
+    return unquoteTreeString(trimmed);
+  }
+  return /^[A-Za-z_$][\w$]*$/.test(trimmed) ? trimmed : null;
+}
+
+function localIdentifierFromPatternText(text) {
+  const trimmed = stripPatternDefault(text);
+  return /^[A-Za-z_$][\w$]*$/.test(trimmed) ? trimmed : null;
+}
+
+function extractImportLocalNames(importText) {
+  const names = [];
+  const text = String(importText || "");
+
+  const namespaceMatch = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(text);
+  if (namespaceMatch) {
+    names.push(namespaceMatch[1]);
+  }
+
+  const namedMatch = /\{([^}]+)\}/.exec(text);
+  if (namedMatch) {
+    for (const part of splitTopLevelCommaSeparated(namedMatch[1])) {
+      const [importedName, localName] = part.trim().split(/\s+as\s+/i).map((value) => value.trim());
+      const bindingName = localName || importedName;
+      if (/^[A-Za-z_$][\w$]*$/.test(bindingName || "")) {
+        names.push(bindingName);
+      }
+    }
+  }
+
+  const defaultMatch = /^\s*import\s+([A-Za-z_$][\w$]*)\s*(?:,|\s+from\b)/.exec(text);
+  if (defaultMatch) {
+    names.push(defaultMatch[1]);
+  }
+
+  return names;
+}
+
+function isCreateClientCallExpression(sourceCode, node) {
+  if (!node || node.type !== "call_expression") {
+    return false;
+  }
+
+  const calleeNode = childForField(node, "function") || node.namedChild(0);
+  if (!calleeNode) {
+    return false;
+  }
+
+  const calleeText = textFromNode(sourceCode, calleeNode).replace(/\s+/g, "");
+  return /(?:^|\.)createClient$/.test(calleeText);
+}
+
+function unwrapCallArgumentNode(node) {
+  let cursor = node;
+  while (
+    cursor?.parent &&
+    ["as_expression", "non_null_expression", "parenthesized_expression", "satisfies_expression", "type_assertion"].includes(cursor.parent.type) &&
+    cursor.parent.namedChildCount === 1
+  ) {
+    cursor = cursor.parent;
+  }
+  return cursor;
+}
+
+function createClientArgumentIndexForNode(sourceCode, node) {
+  let argumentNode = unwrapCallArgumentNode(node);
+  while (argumentNode?.parent && argumentNode.parent.type !== "arguments") {
+    argumentNode = argumentNode.parent;
+  }
+
+  const argsNode = argumentNode?.parent;
+  if (!argsNode || argsNode.type !== "arguments") {
+    return -1;
+  }
+
+  const callNode = argsNode.parent;
+  if (!isCreateClientCallExpression(sourceCode, callNode)) {
+    return -1;
+  }
+
+  return callArgumentNodes(callNode).indexOf(argumentNode);
+}
+
+function hardcodedSecretLiteralMatchFromNode(sourceCode, node, context = {}) {
+  const seenNodes = context.seenNodes || new Set();
+  const nodeKey = node ? `${node.startIndex}:${node.endIndex}:${node.type}` : "";
+  if (nodeKey && seenNodes.has(nodeKey)) {
+    return null;
+  }
+  if (nodeKey) {
+    seenNodes.add(nodeKey);
+  }
+  const recursiveContext = { ...context, seenNodes };
+  const staticValue = staticStringFromNode(sourceCode, node, context);
+  const staticMatch = secretEvidenceForValue(staticValue);
+  if (staticMatch) {
+    return { ...staticMatch, node };
+  }
+
+  let match = null;
+  walkTree(node, (candidate) => {
+    if (match) {
+      return;
+    }
+
+    let value = null;
+    if (candidate.type === "string") {
+      value = unquoteTreeString(textFromNode(sourceCode, candidate));
+    } else if (candidate.type === "template_string") {
+      const templateValue = staticStringFromNode(sourceCode, candidate, context);
+      value = templateValue === null ? textFromNode(sourceCode, candidate) : templateValue;
+    } else if (candidate.type === "identifier") {
+      value = staticStringFromNode(sourceCode, candidate, context);
+      if (value === null) {
+        const bindingRecord = lookupStaticNodeBindingRecord(textFromNode(sourceCode, candidate), { ...context, node: candidate });
+        if (bindingRecord?.unresolvedImport) {
+          match = {
+            credential: null,
+            evidence: "Unresolved imported createClient key",
+            value: "unresolved import",
+            node: candidate
+          };
+          return;
+        }
+        const boundNode = bindingRecord?.node || null;
+        const boundMatch = boundNode
+          ? hardcodedSecretLiteralMatchFromNode(sourceCode, boundNode, recursiveContext)
+          : null;
+        if (boundMatch) {
+          match = boundMatch;
+        }
+        return;
+      }
+    } else if (candidate.type === "member_expression" || candidate.type === "subscript_expression") {
+      const propertyValueNode = staticMemberPropertyValueNode(sourceCode, candidate, context);
+      const propertyMatch = propertyValueNode
+        ? hardcodedSecretLiteralMatchFromNode(sourceCode, propertyValueNode, recursiveContext)
+        : null;
+      if (propertyMatch) {
+        match = propertyMatch;
+      }
+      return;
+    }
+
+    const secretMatch = secretEvidenceForValue(value);
+    if (secretMatch) {
+      match = { ...secretMatch, node: candidate };
+    }
+  });
+
+  return match;
+}
+
 function decodeSupabaseJwtRole(value) {
   if (!/^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value)) {
     return null;
@@ -1279,6 +1563,7 @@ function collectNamedSecretLiteralFindings({
   includeKnownSecretLiterals = false
 }) {
   const findings = [];
+  const localCreateClientUrlFirstArgIdentifiers = collectLocalCreateClientUrlFirstArgIdentifiers(tree, sourceCode);
 
   walkTree(tree.rootNode, (node) => {
     if (node.type === "variable_declarator") {
@@ -1294,6 +1579,10 @@ function collectNamedSecretLiteralFindings({
       }
 
       const innerString = unquoteTreeString(textFromNode(sourceCode, valueNode));
+      if (localCreateClientUrlFirstArgIdentifiers.has(variableName) && isLocalDevelopmentUrl(innerString)) {
+        return;
+      }
+
       const matchedCredential = detectCredential(innerString);
       if (!includeKnownSecretLiterals && (matchedCredential || detectSecret(innerString))) {
         return;
@@ -1329,6 +1618,10 @@ function collectNamedSecretLiteralFindings({
     }
 
     const innerString = unquoteTreeString(textFromNode(sourceCode, rightNode));
+    if (localCreateClientUrlFirstArgIdentifiers.has(variableName) && isLocalDevelopmentUrl(innerString)) {
+      return;
+    }
+
     const matchedCredential = detectCredential(innerString);
     if (!includeKnownSecretLiterals && (matchedCredential || detectSecret(innerString))) {
       return;
@@ -1404,14 +1697,20 @@ function lexicalScopeKey(node) {
   return scopeNode ? `${scopeNode.startIndex}:${scopeNode.endIndex}` : "global";
 }
 
-function lookupStaticBinding(identifier, context = {}) {
-  const scopeKey = context.scopeKey || (context.node ? lexicalScopeKey(context.node) : null);
-  if (!scopeKey || !context.bindings) {
-    return null;
+function lexicalScopeKeys(node) {
+  const keys = [];
+  let cursor = node?.parent || null;
+  while (cursor) {
+    if (cursor.type === "statement_block" || cursor.type === "program") {
+      keys.push(`${cursor.startIndex}:${cursor.endIndex}`);
+    }
+    cursor = cursor.parent || null;
   }
+  return keys;
+}
 
-  const binding = context.bindings.get(`${scopeKey}:${identifier}`);
-  if (!binding) {
+function lookupScopedBinding(bindings, identifier, context = {}) {
+  if (!bindings) {
     return null;
   }
 
@@ -1420,7 +1719,34 @@ function lookupStaticBinding(identifier, context = {}) {
     : Number.isFinite(context.node?.startIndex)
       ? context.node.startIndex
       : Number.POSITIVE_INFINITY;
-  return binding.declarationEndIndex <= readIndex ? binding.value : null;
+  const scopeKeys = context.scopeKey
+    ? [context.scopeKey]
+    : context.node
+      ? lexicalScopeKeys(context.node)
+      : [];
+
+  for (const scopeKey of scopeKeys) {
+    const binding = bindings.get(`${scopeKey}:${identifier}`);
+    if (binding && binding.declarationEndIndex <= readIndex) {
+      return binding;
+    }
+  }
+
+  return null;
+}
+
+function lookupStaticBinding(identifier, context = {}) {
+  const binding = lookupScopedBinding(context.bindings, identifier, context);
+  return binding ? binding.value : null;
+}
+
+function lookupStaticNodeBindingRecord(identifier, context = {}) {
+  return lookupScopedBinding(context.nodeBindings, identifier, context);
+}
+
+function lookupStaticNodeBinding(identifier, context = {}) {
+  const binding = lookupStaticNodeBindingRecord(identifier, context);
+  return binding ? binding.node : null;
 }
 
 function staticStringFromInlineExpressionText(expressionText, context = {}) {
@@ -1541,6 +1867,29 @@ function staticStringFromArrayJoinText(callText, context = {}) {
   return separator === null ? null : values.join(separator);
 }
 
+function decodeBase64Literal(value, encoding = "base64") {
+  try {
+    return Buffer.from(String(value || ""), encoding).toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
+function staticStringFromBase64DecoderText(callText) {
+  const text = String(callText || "").trim();
+  const atobMatch = /^atob\s*\(\s*(["'`])([A-Za-z0-9+/=_-]+)\1\s*\)$/.exec(text);
+  if (atobMatch) {
+    return decodeBase64Literal(atobMatch[2], "base64");
+  }
+
+  const bufferMatch = /^Buffer\s*\.\s*from\s*\(\s*(["'`])([A-Za-z0-9+/=_-]+)\1\s*,\s*(["'`])(base64url|base64)\3\s*\)\s*\.\s*toString\s*\(\s*(?:(["'`])(?:utf-?8|ascii|latin1)\5\s*)?\)$/.exec(text);
+  if (bufferMatch) {
+    return decodeBase64Literal(bufferMatch[2], bufferMatch[4]);
+  }
+
+  return null;
+}
+
 function staticStringFromTemplateText(templateText, context = {}) {
   const text = String(templateText || "").trim();
   if (!text.startsWith("`") || !text.endsWith("`")) {
@@ -1621,7 +1970,8 @@ function staticStringFromNode(sourceCode, node, context = {}) {
   }
 
   if (node.type === "call_expression") {
-    return staticStringFromArrayJoinText(textFromNode(sourceCode, node), scopedContext);
+    const callText = textFromNode(sourceCode, node);
+    return staticStringFromBase64DecoderText(callText) || staticStringFromArrayJoinText(callText, scopedContext);
   }
 
   if (node.type !== "binary_expression") {
@@ -1637,6 +1987,71 @@ function staticStringFromNode(sourceCode, node, context = {}) {
   const left = staticStringFromNode(sourceCode, leftNode, scopedContext);
   const right = staticStringFromNode(sourceCode, rightNode, scopedContext);
   return left === null || right === null ? null : `${left}${right}`;
+}
+
+function staticObjectPropertyValueNode(sourceCode, objectNode, propertyName) {
+  if (!objectNode || objectNode.type !== "object" || !propertyName) {
+    return null;
+  }
+
+  for (let index = 0; index < objectNode.namedChildCount; index += 1) {
+    const pairNode = objectNode.namedChild(index);
+    if (!pairNode || pairNode.type !== "pair") {
+      continue;
+    }
+
+    const keyNode = childForField(pairNode, "key") || pairNode.namedChild(0);
+    const valueNode = childForField(pairNode, "value") || pairNode.namedChild(1);
+    if (!keyNode || !valueNode) {
+      continue;
+    }
+
+    const keyText = keyNode.type === "string"
+      ? unquoteTreeString(textFromNode(sourceCode, keyNode))
+      : textFromNode(sourceCode, keyNode);
+    if (keyText === propertyName) {
+      return valueNode;
+    }
+  }
+
+  return null;
+}
+
+function staticMemberAccessParts(sourceCode, node, context = {}) {
+  const text = textFromNode(sourceCode, node).trim();
+  const dotMatch = /^([A-Za-z_$][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)$/.exec(text);
+  if (dotMatch) {
+    return { objectName: dotMatch[1], propertyName: dotMatch[2] };
+  }
+
+  const bracketMatch = /^([A-Za-z_$][\w$]*)\s*\[\s*(["'`])([^"'`]+)\2\s*\]$/.exec(text);
+  if (bracketMatch) {
+    return { objectName: bracketMatch[1], propertyName: bracketMatch[3] };
+  }
+
+  const computedIdentifierMatch = /^([A-Za-z_$][\w$]*)\s*\[\s*([A-Za-z_$][\w$]*)\s*\]$/.exec(text);
+  if (computedIdentifierMatch) {
+    const propertyName = lookupStaticBinding(computedIdentifierMatch[2], { ...context, node });
+    return typeof propertyName === "string"
+      ? { objectName: computedIdentifierMatch[1], propertyName }
+      : null;
+  }
+
+  return null;
+}
+
+function staticMemberPropertyValueNode(sourceCode, node, context = {}) {
+  if (!["member_expression", "subscript_expression"].includes(node?.type)) {
+    return null;
+  }
+
+  const access = staticMemberAccessParts(sourceCode, node, context);
+  if (!access) {
+    return null;
+  }
+
+  const objectNode = lookupStaticNodeBinding(access.objectName, { ...context, node });
+  return staticObjectPropertyValueNode(sourceCode, objectNode, access.propertyName);
 }
 
 function isConstVariableDeclarator(sourceCode, node) {
@@ -1671,6 +2086,7 @@ function collectStaticStringBindings(tree, sourceCode) {
       if (value !== null) {
         bindings.set(bindingKey, {
           value,
+          node: valueNode,
           declarationEndIndex: node.endIndex
         });
         changed = true;
@@ -1679,6 +2095,114 @@ function collectStaticStringBindings(tree, sourceCode) {
   }
 
   return bindings;
+}
+
+function collectStaticNodeBindings(tree, sourceCode) {
+  const bindings = new Map();
+
+  walkTree(tree.rootNode, (node) => {
+    if (node.type === "import_statement") {
+      const scopeKey = lexicalScopeKey(node);
+      for (const localName of extractImportLocalNames(textFromNode(sourceCode, node))) {
+        const bindingKey = `${scopeKey}:${localName}`;
+        if (!bindings.has(bindingKey)) {
+          bindings.set(bindingKey, {
+            node: null,
+            unresolvedImport: true,
+            declarationEndIndex: node.endIndex
+          });
+        }
+      }
+      return;
+    }
+
+    if (node.type !== "variable_declarator" || !isConstVariableDeclarator(sourceCode, node)) {
+      return;
+    }
+
+    const nameNode = childForField(node, "name");
+    const valueNode = childForField(node, "value");
+    if (!nameNode || !valueNode) {
+      return;
+    }
+
+    const scopeKey = lexicalScopeKey(node);
+    const setBinding = (localName, boundNode) => {
+      if (!/^[A-Za-z_$][\w$]*$/.test(localName || "") || !boundNode) {
+        return;
+      }
+
+      const bindingKey = `${scopeKey}:${localName}`;
+      if (!bindings.has(bindingKey)) {
+        bindings.set(bindingKey, {
+          node: boundNode,
+          declarationEndIndex: node.endIndex
+        });
+      }
+    };
+
+    if (nameNode.type === "identifier") {
+      setBinding(textFromNode(sourceCode, nameNode), valueNode);
+      return;
+    }
+
+    if (nameNode.type === "object_pattern" && valueNode.type === "object") {
+      const patternText = textFromNode(sourceCode, nameNode).trim().replace(/^\{|\}$/g, "");
+      for (const part of splitTopLevelCommaSeparated(patternText)) {
+        if (!part || part.startsWith("...")) {
+          continue;
+        }
+
+        const colonIndex = findTopLevelColon(part);
+        const keyText = colonIndex === -1 ? part : part.slice(0, colonIndex);
+        const localText = colonIndex === -1 ? part : part.slice(colonIndex + 1);
+        const propertyName = normalizeObjectPatternKey(stripPatternDefault(keyText));
+        const localName = localIdentifierFromPatternText(localText);
+        const boundNode = staticObjectPropertyValueNode(sourceCode, valueNode, propertyName);
+        setBinding(localName, boundNode);
+      }
+      return;
+    }
+
+    if (nameNode.type === "array_pattern" && valueNode.type === "array") {
+      const patternText = textFromNode(sourceCode, nameNode).trim().replace(/^\[|\]$/g, "");
+      const localNames = splitTopLevelCommaSeparated(patternText);
+      for (let index = 0; index < localNames.length; index += 1) {
+        const localName = localIdentifierFromPatternText(localNames[index]);
+        const boundNode = valueNode.namedChild(index);
+        setBinding(localName, boundNode);
+      }
+    }
+  });
+
+  return bindings;
+}
+
+function collectLocalCreateClientUrlFirstArgIdentifiers(tree, sourceCode) {
+  const identifiers = new Set();
+  const staticBindings = collectStaticStringBindings(tree, sourceCode);
+
+  walkTree(tree.rootNode, (node) => {
+    if (!isCreateClientCallExpression(sourceCode, node)) {
+      return;
+    }
+
+    const firstArg = callArgumentNodes(node)[0];
+    if (!firstArg) {
+      return;
+    }
+
+    const staticValue = staticStringFromNode(sourceCode, firstArg, { bindings: staticBindings });
+    if (!isLocalDevelopmentUrl(staticValue)) {
+      return;
+    }
+
+    for (const identifier of collectPatternIdentifiers(firstArg, sourceCode)) {
+      identifiers.add(identifier);
+    }
+  });
+
+  return identifiers;
 }
 
 function credentialFindingForStaticValue({ filePath, relativePath, sourceCode, node, value, requireClientComponent }) {
@@ -1714,9 +2238,17 @@ function scanCredentialStrings({ filePath, relativePath, sourceCode, tree, requi
     if (node.type === "string") {
       const rawString = textFromNode(sourceCode, node);
       const innerString = unquoteTreeString(rawString);
+      const createClientArgIndex = createClientArgumentIndexForNode(sourceCode, node);
+      if (createClientArgIndex === 0 && isLocalDevelopmentUrl(innerString)) {
+        return;
+      }
+
       const credential = detectCredential(innerString);
       const secretEvidence = credential?.label || detectSecret(innerString);
       if (!secretEvidence) {
+        return;
+      }
+      if (isBackendApiRoute(relativePath) && createClientArgIndex > 0) {
         return;
       }
 
@@ -1736,6 +2268,14 @@ function scanCredentialStrings({ filePath, relativePath, sourceCode, tree, requi
 
     if (["binary_expression", "call_expression", "template_string"].includes(node.type)) {
       const staticValue = staticStringFromNode(sourceCode, node, { bindings: staticBindings });
+      const createClientArgIndex = createClientArgumentIndexForNode(sourceCode, node);
+      if (createClientArgIndex === 0 && isLocalDevelopmentUrl(staticValue)) {
+        return;
+      }
+      if (isBackendApiRoute(relativePath) && createClientArgIndex > 0) {
+        return;
+      }
+
       const staticFinding = credentialFindingForStaticValue({
         filePath,
         relativePath,
@@ -1794,6 +2334,8 @@ function scanBackendStrings({ filePath, relativePath, sourceCode, tree, includeS
   }
 
   const findings = [];
+  const staticBindings = collectStaticStringBindings(tree, sourceCode);
+  const staticNodeBindings = collectStaticNodeBindings(tree, sourceCode);
   walkTree(tree.rootNode, (node) => {
     if (node.type === "call_expression") {
       const callText = textFromNode(sourceCode, node);
@@ -1809,6 +2351,32 @@ function scanBackendStrings({ filePath, relativePath, sourceCode, tree, includeS
             evidence: `jwt.${jwtMatch[1]} hardcoded secret`
           })
         );
+      }
+
+      if (isBackendApiRoute(relativePath) && isCreateClientCallExpression(sourceCode, node)) {
+        for (const argNode of callArgumentNodes(node).slice(1)) {
+          const secretMatch = hardcodedSecretLiteralMatchFromNode(sourceCode, argNode, {
+            bindings: staticBindings,
+            nodeBindings: staticNodeBindings
+          });
+          if (!secretMatch) {
+            continue;
+          }
+
+          findings.push(
+            finding({
+              ruleId: "backend-secret",
+              severity: "critical",
+              filePath,
+              line: lineFromStringIndex(sourceCode, argNode.startIndex),
+              message: "Supabase createClient key argument uses a hardcoded backend secret.",
+              evidence: /service[_-]?role/i.test(String(secretMatch.value))
+                ? "Supabase service role key passed to createClient"
+                : secretMatch.evidence,
+              fix: getCredentialFixForStaticValue(sourceCode, secretMatch.node, secretMatch.credential)
+            })
+          );
+        }
       }
       return;
     }

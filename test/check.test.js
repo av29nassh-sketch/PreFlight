@@ -297,6 +297,443 @@ describe("PreFlight Check", () => {
     );
   });
 
+  test("does not flag local Supabase createClient URL first arguments as secrets", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/local/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "export function GET() {",
+        "  const apiKey = \"http://localhost:54321\";",
+        "  const loopbackKey = \"http://127.0.0.1:54321\";",
+        "  const directClient = createClient(\"http://localhost:54321\", process.env.SUPABASE_ANON_KEY!);",
+        "  const localClient = createClient(apiKey, process.env.SUPABASE_ANON_KEY!);",
+        "  const loopbackClient = createClient(loopbackKey, process.env.SUPABASE_ANON_KEY!);",
+        "  return Response.json({ ok: Boolean(directClient && localClient && loopbackClient) });",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+    const secretFindings = findings.filter(
+      (finding) => finding.ruleId === "backend-secret" || finding.ruleId === "frontend-secret"
+    );
+
+    expect(secretFindings).toHaveLength(0);
+  });
+
+  test("flags hardcoded Supabase service role keys in createClient key arguments", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "export function GET() {",
+        "  const adminClient = createClient(\"http://localhost:54321\", \"supabase-service-role-key\");",
+        "  return Response.json({ ok: Boolean(adminClient) });",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/route.ts"),
+          line: 3,
+          evidence: "Supabase service role key passed to createClient"
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient when first arg is conditional template and key is hardcoded", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/template-url/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "const isDev = process.env.NODE_ENV === 'development';",
+        "export function GET() {",
+        "  return createClient(`https://${isDev ? 'localhost:54321' : 'production-db.supabase.co'}`, 'supabase-service-role-key');",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/template-url/route.ts"),
+          line: 4,
+          evidence: "Supabase service role key passed to createClient"
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient when URL uses local fallback and key is hardcoded", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/url-fallback/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "export function GET() {",
+        "  return createClient(process.env.SUPABASE_URL || 'http://localhost:54321', 'supabase-service-role-key');",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/url-fallback/route.ts"),
+          line: 3,
+          evidence: "Supabase service role key passed to createClient"
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient key hidden behind logical fallback", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/key-fallback/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "export function GET() {",
+        "  return createClient('http://localhost:54321', process.env.SUPABASE_SERVICE_ROLE_KEY || 'supabase-service-role-key');",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/key-fallback/route.ts"),
+          line: 3
+        })
+      ])
+    );
+  });
+
+  test("does not treat localhost-looking remote hosts as local development URLs", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/localhost-evasion/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "export function GET() {",
+        "  const apiKey = 'https://localhost.evil.example';",
+        "  return createClient(apiKey, process.env.SUPABASE_ANON_KEY!);",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/localhost-evasion/route.ts"),
+          line: 3
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient key returned from an IIFE", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/iife-key/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "const url = 'https://example.supabase.co';",
+        "export function GET() {",
+        "  return createClient(url, (() => 'supabase-service-role-key')());",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/iife-key/route.ts"),
+          line: 4,
+          evidence: "Supabase service role key passed to createClient"
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient key assembled with array join", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/join-key/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "const url = 'https://example.supabase.co';",
+        "export function GET() {",
+        "  return createClient(url, ['supabase', 'service', 'role', 'key'].join('-'));",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/join-key/route.ts"),
+          line: 4,
+          evidence: "Supabase service role key passed to createClient"
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient key referenced through a neutral identifier fallback", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/neutral-identifier/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "const url = 'https://example.supabase.co';",
+        "const k = ['supabase', 'service', 'role', 'key'].join('-');",
+        "export function GET() {",
+        "  return createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY || k);",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/neutral-identifier/route.ts"),
+          line: 5
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient key accessed through object property indirection", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/member-key/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "const url = 'https://example.supabase.co';",
+        "const config = { admin: 'supabase-service-role-key' };",
+        "export function GET() {",
+        "  return createClient(url, config.admin);",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/member-key/route.ts"),
+          line: 5
+        })
+      ])
+    );
+  });
+
+  test("does not treat localhost basic-auth username as a local URL host", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/basic-auth-url/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "export function GET() {",
+        "  return createClient('https://localhost@production-db.supabase.co', 'supabase-service-role-key');",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/basic-auth-url/route.ts"),
+          line: 3,
+          evidence: "Supabase service role key passed to createClient"
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient key pulled from object destructuring", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/destructure-object/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "const url = 'https://example.supabase.co';",
+        "const { admin } = { admin: ['supabase', 'service', 'role', 'key'].join('-') };",
+        "export function GET() {",
+        "  return createClient(url, admin);",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/destructure-object/route.ts"),
+          line: 5
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient key pulled from array destructuring", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/destructure-array/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "const url = 'https://example.supabase.co';",
+        "const [endpoint, token] = [url, ['supabase', 'service', 'role', 'key'].join('-')];",
+        "export function GET() {",
+        "  return createClient(endpoint, token);",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/destructure-array/route.ts"),
+          line: 5
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient key accessed through computed object property identifier", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/computed-member/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "const url = 'https://example.supabase.co';",
+        "const keyName = 'admin';",
+        "const config = { admin: ['supabase', 'service', 'role', 'key'].join('-') };",
+        "export function GET() {",
+        "  return createClient(url, config[keyName]);",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/computed-member/route.ts"),
+          line: 6
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient key decoded through atob", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/atob-key/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "const url = 'https://example.supabase.co';",
+        "export function GET() {",
+        "  return createClient(url, atob('c3VwYWJhc2Utc2VydmljZS1yb2xlLWtleQ=='));",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/atob-key/route.ts"),
+          line: 4
+        })
+      ])
+    );
+  });
+
+  test("hard-blocks createClient key decoded through Buffer.from base64", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/buffer-key/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "const url = 'https://example.supabase.co';",
+        "export function GET() {",
+        "  return createClient(url, Buffer.from('c3VwYWJhc2Utc2VydmljZS1yb2xlLWtleQ==', 'base64').toString('utf8'));",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/buffer-key/route.ts"),
+          line: 4
+        })
+      ])
+    );
+  });
+
+  test("fails safe when createClient key comes from unresolved local import", async () => {
+    const { scanProject } = require("../index");
+    const root = makeProject({
+      "app/api/admin/imported-key/config.ts": [
+        "export const adminKey = ['supabase', 'service', 'role', 'key'].join('-');"
+      ].join("\n"),
+      "app/api/admin/imported-key/route.ts": [
+        "import { createClient } from '@supabase/supabase-js';",
+        "import { adminKey } from './config';",
+        "const url = 'https://example.supabase.co';",
+        "export function GET() {",
+        "  return createClient(url, adminKey);",
+        "}"
+      ].join("\n")
+    });
+
+    const findings = await scanProject(root);
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: "backend-secret",
+          filePath: path.join(root, "app/api/admin/imported-key/route.ts"),
+          line: 5
+        })
+      ])
+    );
+  });
+
   test("does not scan app server components for frontend secrets", async () => {
     const { scanProject } = require("../index");
     const root = makeProject({
