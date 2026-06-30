@@ -467,6 +467,14 @@
       margin: 30px 0 0;
     }
 
+    .hero-promise {
+      max-width: 760px;
+      margin: 18px 0 0;
+      color: var(--ink-soft);
+      font-size: 1rem;
+      line-height: 1.6;
+    }
+
     .pill {
       display: inline-flex;
       align-items: center;
@@ -490,6 +498,12 @@
 
     .trust {
       color: var(--pass);
+    }
+
+    .urgency {
+      border-color: rgba(240,84,79,0.26);
+      background: rgba(240,84,79,0.08);
+      color: var(--accent-dark);
     }
 
     .report-visual {
@@ -941,6 +955,69 @@
       font-weight: 620;
     }
 
+    .proof-card {
+      border: 1px solid rgba(240,84,79,0.2);
+      border-radius: var(--radius-xl);
+      background:
+        radial-gradient(circle at 18% 0%, rgba(240,84,79,0.13), transparent 28rem),
+        var(--card-bg);
+      padding: clamp(24px, 4vw, 46px);
+      box-shadow: var(--card-shadow);
+    }
+
+    .proof-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+      gap: 22px;
+      align-items: start;
+    }
+
+    .proof-copy p {
+      color: var(--muted);
+      font-size: 1.02rem;
+      line-height: 1.65;
+    }
+
+    .proof-facts {
+      display: grid;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .proof-facts span {
+      display: block;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 760;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .proof-facts strong {
+      display: block;
+      margin-top: 4px;
+      color: var(--ink);
+    }
+
+    .before-after {
+      display: grid;
+      gap: 14px;
+    }
+
+    .code-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 760;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
     .price-card {
       border: 1px solid rgba(240,84,79,0.28);
       border-radius: 48px;
@@ -973,6 +1050,14 @@
     .mt-16 { margin-top: 16px; }
     .mt-18 { margin-top: 18px; }
     .featured-tier { border-color: rgba(240,84,79,0.32); }
+
+    .product-continuation .tier-price {
+      font-size: clamp(2.1rem, 4vw, 3.7rem);
+    }
+
+    .product-continuation .card {
+      opacity: 0.9;
+    }
 
     .guarantee,
     .disclaimer {
@@ -1285,7 +1370,8 @@
       .risk-board,
       .decision-corridor,
       .audience-grid,
-      .sample-report {
+      .sample-report,
+      .proof-grid {
         grid-template-columns: 1fr;
       }
 
@@ -1438,7 +1524,7 @@
         <span class="theme-toggle-icon" aria-hidden="true">D</span>
         <span class="theme-toggle-text">Dark</span>
       </button>
-      <a class="btn btn-primary" href="#report-pricing">Order report</a>
+      <a class="btn btn-primary" href="#report-pricing">Order $49 Repo Risk Report</a>
     </div>
   </nav>
 
@@ -1449,12 +1535,14 @@
         <h1>AI-built repo risk, decoded.</h1>
         <p class="lede">PreFlight scans AI-built Next.js, Supabase, Vercel, Cursor, Lovable, Bolt, and Claude-assisted codebases for common launch-blocking security mistakes. Then I manually verify the top findings and send you a private report.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="#report-pricing">Order Repo Risk Report</a>
+          <a class="btn btn-primary" href="#report-pricing">Order $49 Repo Risk Report</a>
           <a class="btn" href="#sample">See sample report</a>
         </div>
+        <p class="hero-promise">Top 5 verified findings, exact file paths, severity, why it matters, and fix direction within 48-72 hours.</p>
         <div class="hero-meta">
           <span class="pill price-pill">$49 global / &#8377;2,999 India</span>
-          <span class="pill trust">Refunded if no useful verified issue is found</span>
+          <span class="pill trust">Full refund if no useful verified issue is found</span>
+          <span class="pill urgency">Only 10 reports this week</span>
         </div>
       </div>
 
@@ -1488,6 +1576,48 @@
   </header>
 
   <main>
+    <section class="section" id="proof">
+      <div class="shell">
+        <article class="proof-card reveal">
+          <div class="proof-grid">
+            <div class="proof-copy">
+              <span class="chapter-label">Example finding</span>
+              <h2>Missing RLS on a sensitive webhook table.</h2>
+              <p>This is the kind of launch-blocking drift the report is built to surface: a migration creates a table for sensitive webhook payloads, but the AI-generated schema forgets the explicit row-level security boundary.</p>
+              <div class="proof-facts">
+                <div><span>File path</span><strong>supabase/migrations/create_webhook_events.sql</strong></div>
+                <div><span>Severity</span><strong>Hard Block</strong></div>
+                <div><span>Fix direction</span><strong>Enable RLS, add scoped policies, and block direct client access.</strong></div>
+              </div>
+            </div>
+            <div class="before-after">
+              <div>
+                <span class="code-label">Before - AI drift</span>
+                <pre><code><span class="bad">create table public.webhook_events (</span>
+  id uuid primary key,
+  provider text not null,
+  payload jsonb not null,
+  created_at timestamptz default now()
+);
+
+<span class="warn">-- missing explicit RLS boundary</span></code></pre>
+              </div>
+              <div>
+                <span class="code-label">After - fix direction</span>
+                <pre><code><span class="ok">alter table public.webhook_events
+  enable row level security;</span>
+
+create policy "internal webhook review only"
+  on public.webhook_events
+  for select
+  using (auth.jwt() -&gt;&gt; 'role' = 'admin');</code></pre>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <section class="section" id="problem">
       <div class="shell">
         <div class="chapter-head reveal">
@@ -1602,12 +1732,13 @@
               <p class="lede">Best for founders, agencies, and devs who want a verified answer fast without setting up or interpreting a tool themselves.</p>
               <div class="price">$49 <small>global / &#8377;2,999 India</small></div>
               <div class="hero-actions">
-                <a class="btn btn-primary" href="#top">Order Repo Risk Report</a>
+                <a class="btn btn-primary" href="#top">Order $49 Repo Risk Report</a>
                 <a class="btn" href="#sample">See sample report</a>
               </div>
             </div>
             <div class="span-5">
-              <div class="guarantee">If I do not find at least one useful verified issue, you get refunded.</div>
+              <div class="guarantee">If I do not find at least one useful, verified issue, you get a full refund. No scanner noise.</div>
+              <div class="disclaimer mt-12">Only 10 reports available this week so each review stays manually verified.</div>
               <div class="disclaimer mt-12">This is not a full pentest. It is a focused AI-code security risk review for common launch-blocking mistakes.</div>
             </div>
           </div>
@@ -1762,14 +1893,14 @@ MCP scan support: enabled</code></pre>
       </div>
     </section>
 
-    <section class="section compact" id="pricing">
+    <section class="section compact product-continuation" id="pricing">
       <div class="shell">
         <div class="chapter-head reveal">
           <div>
-            <span class="chapter-label">Product pricing</span>
-            <h2>Keep protection running after the report.</h2>
+            <span class="chapter-label">Optional product after the report</span>
+            <h2>Keep protection running after the review.</h2>
           </div>
-          <p>The subscription tiers support ongoing local protection. The Repo Risk Report remains the primary website offer.</p>
+          <p>The Repo Risk Report is the primary offer. These tiers are the follow-on path if you want PreFlight watching future AI-generated changes locally.</p>
         </div>
         <div class="grid">
           <article class="card span-4 reveal">
@@ -1878,7 +2009,7 @@ file: app/api/admin/users/route.ts</code></pre>
           </details>
           <details>
             <summary>What if no useful issue is found?</summary>
-            <p>If I do not find at least one useful verified issue, you get refunded.</p>
+            <p>If I do not find at least one useful, verified issue, you get a full refund. No scanner noise.</p>
           </details>
           <details>
             <summary>Can I keep using PreFlight after the report?</summary>
