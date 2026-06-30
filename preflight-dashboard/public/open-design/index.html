@@ -1,0 +1,1995 @@
+<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PreFlight Repo Risk Report | AI-Built Repo Risk, Decoded</title>
+  <meta name="description" content="Get a manually verified private risk report for your AI-built Next.js, Supabase, Vercel, Cursor, Lovable, Bolt, and Claude-assisted repo.">
+  <script>
+    (function () {
+      try {
+        var savedTheme = localStorage.getItem('preflight-theme');
+        document.documentElement.dataset.theme = savedTheme === 'dark' ? 'dark' : 'light';
+      } catch (error) {
+        document.documentElement.dataset.theme = 'light';
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #fbfaf7;
+      --paper: #ffffff;
+      --wash: #f1eee8;
+      --wash-2: #e9e4dc;
+      --ink: #141414;
+      --ink-soft: #2c2926;
+      --muted: #6b655f;
+      --muted-2: #8c8580;
+      --line: #ded8cf;
+      --line-strong: #c9c1b8;
+      --accent: #f0544f;
+      --accent-dark: #9f241f;
+      --accent-soft: #ffe7e4;
+      --deep: #101114;
+      --deep-2: #191b20;
+      --deep-3: #23262d;
+      --hard-block: #e13d45;
+      --high-risk: #c58a12;
+      --pass: #159665;
+      --font-display: "Geist", "Satoshi", "Neue Haas Grotesk Text", "Helvetica Neue", system-ui, sans-serif;
+      --font-body: "Geist", "Satoshi", "Helvetica Neue", system-ui, sans-serif;
+      --font-mono: "Geist Mono", "Cascadia Code", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+      --max: 1240px;
+      --radius-xl: 42px;
+      --radius-lg: 28px;
+      --radius-md: 18px;
+      --radius-sm: 10px;
+      --body-glow-1: rgba(240, 84, 79, 0.12);
+      --body-glow-2: rgba(20, 20, 20, 0.08);
+      --body-start: rgba(255,255,255,0.84);
+      --body-mid: rgba(251,250,247,0.94);
+      --grid-line-a: rgba(20,20,20,0.045);
+      --grid-line-b: rgba(20,20,20,0.035);
+      --grain-opacity: 0.38;
+      --grain-blend: multiply;
+      --frosted: rgba(255,255,255,0.82);
+      --nav-bg: rgba(251,250,247,0.78);
+      --nav-pill: rgba(255,255,255,0.68);
+      --card-bg: rgba(255,255,255,0.72);
+      --card-hover: rgba(255,255,255,0.88);
+      --card-shadow: 0 24px 70px rgba(20,20,20,0.055);
+      --signal-bg: rgba(255,255,255,0.72);
+      --report-frame: linear-gradient(180deg, #ffffff, #f6f3ee);
+      --price-frame: linear-gradient(180deg, #ffffff, #f7f2ec);
+      --soft-text-on-panel: var(--muted);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #08090c;
+      --paper: #101218;
+      --wash: #151820;
+      --wash-2: #1d212b;
+      --ink: #f7f4ef;
+      --ink-soft: #e3ded6;
+      --muted: #aaa39a;
+      --muted-2: #817a72;
+      --line: rgba(255,255,255,0.12);
+      --line-strong: rgba(255,255,255,0.22);
+      --accent: #ff6f61;
+      --accent-dark: #ffd3cd;
+      --accent-soft: rgba(255,111,97,0.16);
+      --deep: #08090c;
+      --deep-2: #101218;
+      --deep-3: #191d27;
+      --hard-block: #ff5964;
+      --high-risk: #ffd166;
+      --pass: #55d98f;
+      --body-glow-1: rgba(255, 111, 97, 0.16);
+      --body-glow-2: rgba(255, 255, 255, 0.055);
+      --body-start: rgba(8,9,12,0.98);
+      --body-mid: rgba(8,9,12,0.96);
+      --grid-line-a: rgba(255,255,255,0.035);
+      --grid-line-b: rgba(255,255,255,0.025);
+      --grain-opacity: 0.28;
+      --grain-blend: screen;
+      --frosted: rgba(9,10,14,0.76);
+      --nav-bg: rgba(8,9,12,0.76);
+      --nav-pill: rgba(255,255,255,0.06);
+      --card-bg: rgba(255,255,255,0.055);
+      --card-hover: rgba(255,255,255,0.09);
+      --card-shadow: 0 24px 70px rgba(0,0,0,0.28);
+      --signal-bg: rgba(255,255,255,0.055);
+      --report-frame: linear-gradient(180deg, rgba(255,255,255,0.1), rgba(255,255,255,0.035));
+      --price-frame: linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.035));
+      --soft-text-on-panel: var(--muted);
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      color: var(--ink);
+      background: var(--bg);
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow-x: hidden;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 22% 0%, var(--body-glow-1), transparent 32rem),
+        radial-gradient(circle at 88% 8%, var(--body-glow-2), transparent 30rem),
+        linear-gradient(180deg, var(--body-start), var(--body-mid) 560px, var(--bg));
+      font-family: var(--font-body);
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -2;
+      pointer-events: none;
+      background-image:
+        linear-gradient(var(--grid-line-a) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid-line-b) 1px, transparent 1px);
+      background-size: 88px 88px;
+      mask-image: linear-gradient(180deg, black, transparent 760px);
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      opacity: var(--grain-opacity);
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.19'/%3E%3C/svg%3E");
+      mix-blend-mode: var(--grain-blend);
+    }
+
+    ::selection { background: var(--accent-soft); color: var(--accent-dark); }
+
+    a { color: inherit; }
+    img { max-width: 100%; display: block; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+
+    .promo {
+      position: relative;
+      z-index: 40;
+      border-bottom: 1px solid var(--line);
+      background: var(--frosted);
+      backdrop-filter: blur(16px);
+    }
+
+    .promo-inner {
+      width: min(var(--max), calc(100% - 40px));
+      min-height: 42px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    .promo strong {
+      color: var(--ink);
+      font-weight: 650;
+    }
+
+    .promo .arrow {
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-weight: 800;
+    }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 35;
+      border-bottom: 1px solid var(--line);
+      background: var(--nav-bg);
+      backdrop-filter: blur(18px) saturate(1.1);
+    }
+
+    .nav-inner,
+    .shell {
+      width: min(var(--max), calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .nav-inner {
+      min-height: 76px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      position: relative;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+    }
+
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--deep);
+      box-shadow: 0 12px 28px rgba(20,20,20,0.12);
+    }
+
+    .brand-copy strong {
+      display: block;
+      font-size: 0.96rem;
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    .brand-copy span {
+      display: block;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--nav-pill);
+    }
+
+    .nav-links a {
+      min-height: 36px;
+      border-radius: 999px;
+      padding: 9px 13px 0;
+      color: var(--muted);
+      font-size: 0.84rem;
+      font-weight: 620;
+      text-decoration: none;
+      transition: color 180ms ease, background 180ms ease;
+    }
+
+    .nav-links a:hover,
+    .nav-links a:focus-visible {
+      color: var(--ink);
+      background: var(--wash);
+      outline: none;
+    }
+
+    .theme-toggle {
+      display: inline-flex;
+      min-height: 40px;
+      align-items: center;
+      gap: 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 10px 4px 5px;
+      background: var(--nav-pill);
+      color: var(--ink);
+      font: 760 0.74rem/1 var(--font-mono);
+      cursor: pointer;
+      transition: transform 180ms var(--ease), border-color 180ms ease, background 180ms ease;
+    }
+
+    .theme-toggle:hover,
+    .theme-toggle:focus-visible {
+      transform: translateY(-1px);
+      border-color: var(--line-strong);
+      background: var(--card-hover);
+      outline: none;
+    }
+
+    .theme-toggle-icon {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      place-items: center;
+      border-radius: 999px;
+      background: var(--ink);
+      color: var(--bg);
+      font-size: 0.82rem;
+      transition: background 180ms ease, color 180ms ease;
+    }
+
+    .btn {
+      position: relative;
+      overflow: hidden;
+      display: inline-flex;
+      min-height: 48px;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      padding: 0 18px;
+      background: var(--paper);
+      color: var(--ink);
+      font-size: 0.9rem;
+      font-weight: 720;
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform 220ms var(--ease), border-color 180ms ease, background 180ms ease, color 180ms ease;
+    }
+
+    .btn::before {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      border-radius: inherit;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.52), transparent);
+      opacity: 0;
+      transform: translateX(-110%);
+      transition: opacity 180ms ease, transform 620ms var(--ease);
+    }
+
+    .btn:hover,
+    .btn:focus-visible {
+      transform: translateY(-2px);
+      border-color: rgba(20,20,20,0.28);
+      outline: none;
+    }
+
+    .btn:hover::before,
+    .btn:focus-visible::before {
+      opacity: 1;
+      transform: translateX(110%);
+    }
+
+    .btn-primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fffdfa;
+      box-shadow: 0 22px 60px rgba(240,84,79,0.22);
+    }
+
+    .btn-dark {
+      border-color: var(--line-strong);
+      background: var(--ink);
+      color: var(--bg);
+    }
+
+    .copy-btn.is-copied {
+      transform: translateY(-1px) scale(0.985);
+      border-color: var(--pass);
+      background: color-mix(in oklab, var(--pass) 18%, var(--paper));
+      color: var(--ink);
+    }
+
+    .section {
+      position: relative;
+      padding: 112px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .section.compact { padding: 78px 0; }
+    .section.dark {
+      border-top: 1px solid var(--line);
+      background: transparent;
+      color: var(--ink);
+    }
+
+    .section.dark + .section.dark { border-top: 1px solid var(--line); }
+
+    .hero {
+      padding: 78px 0 92px;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.02fr) minmax(380px, 0.72fr);
+      gap: 42px;
+      align-items: end;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      margin-bottom: 22px;
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 0.74rem;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: none;
+    }
+
+    h1,
+    h2,
+    h3,
+    p { margin-top: 0; }
+
+    h1 {
+      max-width: 930px;
+      margin-bottom: 24px;
+      font-family: var(--font-display);
+      font-size: clamp(4.7rem, 10vw, 8.8rem);
+      font-weight: 680;
+      line-height: 0.86;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin-bottom: 18px;
+      font-family: var(--font-display);
+      font-size: clamp(2.7rem, 5.7vw, 6rem);
+      font-weight: 650;
+      line-height: 0.88;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin-bottom: 10px;
+      font-family: var(--font-display);
+      font-size: 1.24rem;
+      line-height: 1.16;
+      letter-spacing: 0;
+    }
+
+    .lede {
+      max-width: 770px;
+      color: var(--muted);
+      font-size: clamp(1.08rem, 1.8vw, 1.36rem);
+      line-height: 1.55;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 32px;
+    }
+
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 30px 0 0;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0 11px;
+      background: var(--nav-pill);
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 0.74rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .price-pill {
+      border-color: rgba(240,84,79,0.26);
+      background: var(--accent-soft);
+      color: var(--accent-dark);
+    }
+
+    .trust {
+      color: var(--pass);
+    }
+
+    .report-visual {
+      position: relative;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius-xl);
+      background: var(--report-frame);
+      padding: 12px;
+      box-shadow: 0 46px 120px rgba(20,20,20,0.18);
+    }
+
+    .report-visual::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: inherit;
+      background: linear-gradient(135deg, rgba(240,84,79,0.32), transparent 26%, rgba(20,20,20,0.14));
+      z-index: -1;
+      opacity: 0.72;
+    }
+
+    .report-window {
+      overflow: hidden;
+      border-radius: 32px;
+      background: var(--deep);
+      color: #fffdfa;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+    }
+
+    .window-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding: 16px 18px;
+      color: rgba(255,255,255,0.62);
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+    }
+
+    .window-status {
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 999px;
+      padding: 5px 8px;
+      color: rgba(255,255,255,0.78);
+      font-size: 0.66rem;
+      text-transform: uppercase;
+    }
+
+    .report-body {
+      position: relative;
+      display: grid;
+      gap: 17px;
+      padding: 24px;
+    }
+
+    .report-body::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(180deg, transparent 12%, rgba(240,84,79,0.14), transparent 28%);
+      transform: translateY(-120%);
+      opacity: 0;
+    }
+
+    .report-visual.motion-focus .report-line {
+      transform: translateY(8px);
+      opacity: 0.9;
+      transition:
+        transform 520ms var(--ease-soft),
+        opacity 520ms var(--ease-soft),
+        border-color 520ms ease,
+        background 520ms ease;
+    }
+
+    .report-visual.motion-focus .report-line:nth-of-type(2) { transition-delay: 80ms; }
+    .report-visual.motion-focus .report-line:nth-of-type(3) { transition-delay: 140ms; }
+    .report-visual.motion-focus .report-line:nth-of-type(4) { transition-delay: 200ms; }
+    .report-visual.motion-focus .report-line:nth-of-type(5) { transition-delay: 260ms; }
+
+    .report-visual.motion-focus.motion-active .report-line {
+      transform: translateY(0);
+      opacity: 1;
+      border-color: color-mix(in oklab, var(--accent) 28%, var(--line));
+    }
+
+    .report-visual.motion-active .report-body::after {
+      animation: scan-once 940ms var(--ease-soft) 120ms both;
+    }
+
+    .label,
+    .file,
+    .severity,
+    code,
+    pre,
+    .mono {
+      font-family: var(--font-mono);
+    }
+
+    .label {
+      display: block;
+      margin-bottom: 7px;
+      color: rgba(255,255,255,0.48);
+      font-size: 0.69rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .file {
+      color: #fffdfa;
+      font-size: 0.82rem;
+      overflow-wrap: anywhere;
+    }
+
+    .report-line {
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.045);
+      padding: 15px;
+    }
+
+    .report-line p {
+      margin: 0;
+      color: rgba(255,255,255,0.74);
+    }
+
+    .severity {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 28px;
+      border: 1px solid currentColor;
+      border-radius: 999px;
+      padding: 0 10px;
+      font-size: 0.66rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .severity::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: currentColor;
+      box-shadow: 0 0 16px currentColor;
+    }
+
+    .hard-block { color: var(--hard-block); background: rgba(225,61,69,0.11); }
+    .high-risk { color: var(--high-risk); background: rgba(197,138,18,0.12); }
+    .pass { color: var(--pass); background: rgba(21,150,101,0.12); }
+    .neutral { color: var(--accent); background: rgba(240,84,79,0.11); }
+
+    .chapter-head {
+      display: block;
+      max-width: 880px;
+      margin-bottom: 42px;
+    }
+
+    .chapter-head p { max-width: 680px; color: var(--muted); margin-bottom: 0; }
+    .section.dark .chapter-head p { color: var(--muted); }
+
+    .chapter-label { display: none; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .span-12 { grid-column: span 12; }
+    .span-8 { grid-column: span 8; }
+    .span-7 { grid-column: span 7; }
+    .span-6 { grid-column: span 6; }
+    .span-5 { grid-column: span 5; }
+    .span-4 { grid-column: span 4; }
+    .span-3 { grid-column: span 3; }
+
+    .card {
+      position: relative;
+      overflow: hidden;
+      min-height: 100%;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--card-bg);
+      padding: 24px;
+      box-shadow: var(--card-shadow);
+      color: var(--ink);
+      transition: transform 240ms var(--ease), border-color 180ms ease, background 180ms ease, color 180ms ease;
+    }
+
+    .card:hover {
+      transform: translateY(-3px);
+      border-color: var(--line-strong);
+      background: var(--card-hover);
+      color: var(--ink);
+    }
+
+    .dark-card {
+      border-color: var(--line);
+      background: var(--card-bg);
+      color: var(--ink);
+      box-shadow: var(--card-shadow);
+    }
+
+    .card p,
+    .card li { color: var(--muted); }
+    .dark-card p,
+    .dark-card li { color: var(--muted); }
+
+    .big-card {
+      border-radius: var(--radius-xl);
+      padding: clamp(28px, 4vw, 52px);
+    }
+
+    .price-card.motion-focus,
+    .finding.motion-focus {
+      position: relative;
+      overflow: hidden;
+      isolation: isolate;
+    }
+
+    .price-card.motion-focus > *,
+    .finding.motion-focus > * {
+      position: relative;
+      z-index: 1;
+    }
+
+    .price-card.motion-focus::after,
+    .finding.motion-focus::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: inherit;
+      z-index: 0;
+      background:
+        linear-gradient(105deg, transparent 0%, rgba(255,255,255,0.22) 42%, transparent 58%),
+        linear-gradient(180deg, transparent, rgba(240,84,79,0.08));
+      opacity: 0;
+      transform: translateX(-42%);
+    }
+
+    .price-card.motion-focus.motion-active::after,
+    .finding.motion-focus.motion-active::after {
+      animation: surface-sheen 760ms var(--ease-soft) 160ms both;
+    }
+
+    .strip {
+      display: flex;
+      gap: 16px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+      scroll-snap-type: x proximity;
+    }
+
+    .strip > * {
+      min-width: min(390px, 84vw);
+      scroll-snap-align: start;
+    }
+
+    .risk-board {
+      display: grid;
+      grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
+      gap: 20px;
+      align-items: stretch;
+    }
+
+    .decision-corridor {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+      gap: clamp(20px, 4vw, 42px);
+      align-items: stretch;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      background:
+        radial-gradient(circle at 8% 0%, color-mix(in oklab, var(--accent) 13%, transparent), transparent 34%),
+        linear-gradient(135deg, var(--paper), var(--wash));
+      padding: clamp(24px, 4.8vw, 58px);
+      box-shadow: var(--card-shadow);
+      isolation: isolate;
+    }
+
+    .decision-panel {
+      display: flex;
+      min-height: 100%;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 34px;
+    }
+
+    .decision-kicker {
+      display: inline-flex;
+      width: max-content;
+      margin-bottom: 18px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 9px 12px;
+      background: var(--card-bg);
+      color: var(--muted);
+      font: 800 0.72rem/1 var(--font-mono);
+      text-transform: uppercase;
+    }
+
+    .decision-panel h3 {
+      max-width: 760px;
+      margin-bottom: 16px;
+      font-size: clamp(2.1rem, 4vw, 4.2rem);
+      line-height: 0.92;
+    }
+
+    .decision-panel p {
+      max-width: 690px;
+      color: var(--muted);
+      font-size: 1.05rem;
+      line-height: 1.65;
+    }
+
+    .decision-path {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .decision-step {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--card-bg);
+      padding: 16px;
+      color: var(--ink);
+    }
+
+    .decision-step span {
+      display: block;
+      margin-bottom: 12px;
+      color: var(--accent);
+      font: 820 0.72rem/1 var(--font-mono);
+      text-transform: uppercase;
+    }
+
+    .decision-step strong {
+      display: block;
+      margin-bottom: 7px;
+      font-size: 0.98rem;
+      line-height: 1.2;
+    }
+
+    .decision-step p {
+      margin: 0;
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+
+    .decision-proof {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+
+    .audit-chip {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--card-bg);
+      padding: 14px;
+      color: var(--ink);
+      transition: transform 220ms var(--ease), border-color 180ms ease, background 180ms ease;
+    }
+
+    .audit-chip:hover {
+      transform: translateY(-2px);
+      border-color: var(--line-strong);
+      background: var(--card-hover);
+    }
+
+    .audit-chip code {
+      display: block;
+      color: var(--ink);
+      font: 780 0.78rem/1.35 var(--font-mono);
+      word-break: break-word;
+    }
+
+    .audit-chip small {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font: 680 0.72rem/1.35 var(--font-mono);
+    }
+
+    .decision-note {
+      border-left: 1px solid var(--line-strong);
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 0.96rem;
+      line-height: 1.55;
+    }
+
+    .signal-panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      background: var(--signal-bg);
+      color: var(--ink);
+      padding: 28px;
+      box-shadow: var(--card-shadow);
+    }
+
+    .signal-panel > p {
+      color: var(--muted);
+    }
+
+    .signal-row {
+      display: grid;
+      grid-template-columns: 130px 1fr;
+      gap: 18px;
+      align-items: start;
+      padding: 19px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .signal-row:first-of-type { border-top: 0; }
+    .signal-row p { margin: 0; color: var(--muted); }
+
+    .decision-corridor .signal-panel {
+      min-height: 100%;
+      background: var(--signal-bg);
+    }
+
+    .deliverable-list {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 22px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .deliverable-list li {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--card-bg);
+      padding: 14px;
+      color: var(--ink-soft);
+      font-weight: 620;
+    }
+
+    .price-card {
+      border: 1px solid rgba(240,84,79,0.28);
+      border-radius: 48px;
+      background:
+        radial-gradient(circle at 84% 0%, rgba(240,84,79,0.18), transparent 30rem),
+        var(--price-frame);
+      padding: clamp(28px, 5vw, 58px);
+      box-shadow: 0 44px 130px rgba(20,20,20,0.12);
+    }
+
+    .price {
+      margin: 20px 0 12px;
+      font-family: var(--font-display);
+      font-size: clamp(3.2rem, 7vw, 7rem);
+      font-weight: 720;
+      line-height: 0.9;
+      letter-spacing: 0;
+    }
+
+    .price small {
+      display: block;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 1rem;
+      letter-spacing: 0;
+    }
+
+    .grid-end { align-items: end; }
+    .mt-12 { margin-top: 12px; }
+    .mt-16 { margin-top: 16px; }
+    .mt-18 { margin-top: 18px; }
+    .featured-tier { border-color: rgba(240,84,79,0.32); }
+
+    .guarantee,
+    .disclaimer {
+      border-radius: 20px;
+      padding: 16px;
+      font-weight: 620;
+    }
+
+    .guarantee {
+      border: 1px solid rgba(21,150,101,0.26);
+      background: rgba(21,150,101,0.08);
+      color: #0b6f4a;
+    }
+
+    .disclaimer {
+      border: 1px solid rgba(197,138,18,0.26);
+      background: rgba(197,138,18,0.09);
+      color: #7b5509;
+    }
+
+    pre {
+      margin: 0;
+      overflow: auto;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 22px;
+      background: #0b0c10;
+      color: rgba(255,255,255,0.82);
+      padding: 18px;
+      font-size: 0.82rem;
+      line-height: 1.7;
+    }
+
+    code { font-size: 0.94em; }
+    .cmd { color: #fffdfa; }
+    .bad { color: #ff7a83; }
+    .warn { color: #ffd171; }
+    .ok { color: #6be6a8; }
+
+    .timeline {
+      counter-reset: step;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-xl);
+      background: var(--card-bg);
+      padding: 8px 28px;
+    }
+
+    .step {
+      counter-increment: step;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+      padding: 28px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .step:first-child { border-top: 0; }
+
+    .step::before {
+      content: none;
+    }
+
+    .audience-grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .persona-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .persona {
+      display: grid;
+      grid-template-columns: 170px 1fr;
+      gap: 16px;
+      border-top: 1px solid var(--line);
+      padding: 18px 0;
+    }
+
+    .persona strong { font-size: 1.04rem; }
+    .persona p { margin: 0; color: var(--muted); }
+
+    .sample-report {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(340px, 0.72fr);
+      gap: 18px;
+    }
+
+    .finding {
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      background: var(--card-bg);
+      padding: 24px;
+      box-shadow: var(--card-shadow);
+      color: var(--ink);
+    }
+
+    .finding + .finding { margin-top: 14px; }
+
+    .finding .report-line {
+      border-color: var(--line);
+      background: color-mix(in srgb, var(--paper) 78%, var(--wash));
+      opacity: 1;
+      transform: none;
+    }
+
+    .finding .label {
+      color: var(--accent-dark);
+    }
+
+    .finding .file {
+      color: var(--ink);
+    }
+
+    .finding .report-line p {
+      color: var(--muted);
+    }
+
+    .mode-card pre { margin-top: 16px; }
+
+    .tier-price {
+      margin: 16px 0;
+      font-family: var(--font-display);
+      font-size: 2.7rem;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+
+    .tier-price span {
+      color: var(--muted);
+      font-size: 1rem;
+      letter-spacing: 0;
+    }
+
+    .check-list {
+      display: grid;
+      gap: 12px;
+      margin: 18px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .check-list li {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 11px;
+      align-items: start;
+    }
+
+    .check-list li::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      margin-top: 0.68em;
+      border-radius: 999px;
+      background: var(--pass);
+    }
+
+    details {
+      border-top: 1px solid var(--line);
+      padding: 24px 0;
+    }
+
+    summary {
+      position: relative;
+      cursor: pointer;
+      color: var(--ink);
+      font-size: 1.1rem;
+      font-weight: 720;
+      list-style: none;
+      padding-right: 34px;
+      transition: color 180ms ease;
+    }
+
+    summary::after {
+      content: "+";
+      position: absolute;
+      top: 0;
+      right: 0;
+      display: grid;
+      width: 26px;
+      height: 26px;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 0.92rem;
+      line-height: 1;
+      transition:
+        transform 180ms var(--ease-soft),
+        border-color 180ms ease,
+        background 180ms ease;
+    }
+
+    details[open] summary::after {
+      transform: rotate(45deg);
+      border-color: color-mix(in oklab, var(--accent) 42%, var(--line));
+      background: var(--accent-soft);
+    }
+
+    summary::-webkit-details-marker { display: none; }
+    details p { max-width: 780px; margin: 14px 0 0; color: var(--muted); }
+    details[open] p { animation: faq-answer-in 220ms var(--ease-soft) both; }
+
+    .footer {
+      border-top: 1px solid var(--line);
+      padding: 54px 0;
+      background: var(--paper);
+    }
+
+    .footer-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 28px;
+      align-items: end;
+    }
+
+    .tiny {
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .footer-note { margin-top: 16px; }
+
+    .reveal {
+      opacity: 0.88;
+      transform: translateY(28px);
+      clip-path: inset(0 0 10% 0 round 18px);
+      transition:
+        opacity 820ms var(--ease),
+        transform 820ms var(--ease),
+        clip-path 820ms var(--ease);
+      transition-delay: calc(var(--delay, 0) * 70ms);
+    }
+
+    .reveal.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+      clip-path: inset(0 0 0 0 round 0);
+    }
+
+    .hero-copy {
+      animation: none;
+    }
+
+    .report-visual {
+      animation: none;
+    }
+
+    @keyframes hero-in {
+      from { opacity: 0; transform: translateY(26px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes hero-card-in {
+      from { opacity: 0; transform: translateY(34px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes scan-once {
+      0%, 28% { transform: translateY(-120%); opacity: 0; }
+      38% { opacity: 1; }
+      64% { transform: translateY(118%); opacity: 0; }
+      100% { transform: translateY(118%); opacity: 0; }
+    }
+
+    @keyframes surface-sheen {
+      0% { opacity: 0; transform: translateX(-42%); }
+      22% { opacity: 1; }
+      100% { opacity: 0; transform: translateX(42%); }
+    }
+
+    @keyframes faq-answer-in {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.001ms !important;
+      }
+
+      .reveal {
+        opacity: 1;
+        transform: none;
+        clip-path: none;
+      }
+    }
+
+    @media (max-width: 980px) {
+      .nav-inner {
+        min-height: auto;
+        flex-wrap: wrap;
+        gap: 12px;
+        padding: 10px 0;
+      }
+
+      .theme-toggle {
+        margin-left: auto;
+      }
+
+      .hero-grid,
+      .chapter-head,
+      .risk-board,
+      .decision-corridor,
+      .audience-grid,
+      .sample-report {
+        grid-template-columns: 1fr;
+      }
+
+      .decision-path {
+        grid-template-columns: 1fr;
+      }
+
+      .span-8,
+      .span-7,
+      .span-6,
+      .span-5,
+      .span-4,
+      .span-3 {
+        grid-column: span 12;
+      }
+
+      .deliverable-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .nav-links {
+        position: static;
+        order: 4;
+        display: flex;
+        width: 100%;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        border-radius: 999px;
+        padding: 6px;
+        background: var(--nav-pill);
+        box-shadow: none;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .nav-links::-webkit-scrollbar {
+        display: none;
+      }
+
+      .nav-links a {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+
+      .nav-links.open {
+        display: flex;
+      }
+
+    }
+
+    @media (max-width: 640px) {
+      .shell,
+      .nav-inner,
+      .promo-inner {
+        width: min(100% - 28px, var(--max));
+      }
+
+      .promo-inner {
+        justify-content: flex-start;
+        overflow-x: auto;
+      }
+
+      .nav-inner {
+        gap: 10px;
+      }
+
+      .theme-toggle {
+        padding-right: 5px;
+      }
+
+      .theme-toggle-text {
+        display: none;
+      }
+
+      .nav-inner > .btn-primary {
+        display: none;
+      }
+
+      .nav-links {
+        justify-content: flex-start;
+      }
+
+      .nav-links a {
+        min-height: 34px;
+        padding: 8px 11px 0;
+        font-size: 0.78rem;
+      }
+
+      .hero {
+        padding-top: 52px;
+      }
+
+      h1 {
+        font-size: clamp(3.75rem, 17vw, 5.4rem);
+      }
+
+      h2 {
+        font-size: clamp(2.45rem, 12vw, 4.1rem);
+      }
+
+      .section {
+        padding: 78px 0;
+      }
+
+      .deliverable-list,
+      .signal-row,
+      .step,
+      .persona,
+      .footer-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .price-card,
+      .report-visual,
+      .signal-panel {
+        border-radius: 28px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="promo">
+    <div class="promo-inner">
+      <strong>Repo Risk Report</strong>
+      <span>$49 global / &#8377;2,999 India</span>
+      <span class="arrow">-&gt;</span>
+      <span>Delivered in 48-72 hours with 1 month of PreFlight Pro included.</span>
+    </div>
+  </div>
+
+  <nav class="nav" aria-label="Primary navigation">
+    <div class="nav-inner">
+      <a class="brand" href="#top" aria-label="PreFlight home">
+        <img class="brand-mark" src="logos/header-img-0.png" alt="" width="38" height="38">
+        <span class="brand-copy">
+          <strong>PreFlight</strong>
+          
+        </span>
+      </a>
+      <div class="nav-links" id="nav-links">
+        <a href="#report">Report</a>
+        <a href="#checks">Checks</a>
+        <a href="#process">Process</a>
+        <a href="#sample">Sample</a>
+        <a href="#modes">Modes</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#faq">FAQ</a>
+      </div>
+      <button class="theme-toggle" type="button" aria-label="Switch to dark mode" aria-pressed="false">
+        <span class="theme-toggle-icon" aria-hidden="true">D</span>
+        <span class="theme-toggle-text">Dark</span>
+      </button>
+      <a class="btn btn-primary" href="#report-pricing">Order report</a>
+    </div>
+  </nav>
+
+  <header class="hero" id="top">
+    <div class="shell hero-grid">
+      <div class="hero-copy">
+        <div class="eyebrow">AI-code security review for fast-shipping repos</div>
+        <h1>AI-built repo risk, decoded.</h1>
+        <p class="lede">PreFlight scans AI-built Next.js, Supabase, Vercel, Cursor, Lovable, Bolt, and Claude-assisted codebases for common launch-blocking security mistakes. Then I manually verify the top findings and send you a private report.</p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#report-pricing">Order Repo Risk Report</a>
+          <a class="btn" href="#sample">See sample report</a>
+        </div>
+        <div class="hero-meta">
+          <span class="pill price-pill">$49 global / &#8377;2,999 India</span>
+          <span class="pill trust">Refunded if no useful verified issue is found</span>
+        </div>
+      </div>
+
+      <aside class="report-visual motion-focus" aria-label="PreFlight report preview">
+        <div class="report-window">
+          <div class="window-bar">
+            <span>PreFlight Repo Risk Report</span>
+            <span class="window-status">Manual review</span>
+          </div>
+          <div class="report-body">
+            <div>
+              <span class="severity hard-block">Finding #1 - Hard Block</span>
+              <h3 class="mt-16">Sensitive webhook table created without explicit RLS boundary.</h3>
+            </div>
+            <div class="report-line">
+              <span class="label">File</span>
+              <p class="file">supabase/migrations/create_webhook_events.sql</p>
+            </div>
+            <div class="report-line">
+              <span class="label">Why it matters</span>
+              <p>Webhook payloads can contain customer, billing, or auth-related metadata.</p>
+            </div>
+            <div class="report-line">
+              <span class="label">Fix direction</span>
+              <p>Enable RLS, add scoped policies, and prevent direct client access.</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </header>
+
+  <main>
+    <section class="section" id="problem">
+      <div class="shell">
+        <div class="chapter-head reveal">
+          <div>
+            <span class="chapter-label">Launch risk</span>
+            <h2>The decision point before an AI-built repo goes live.</h2>
+          </div>
+          <p>The dangerous mistakes are usually boring: missing RLS, exposed server secrets, unsafe routes, weak webhook boundaries, and client/server leaks. PreFlight turns that uncertainty into a short verified launch call.</p>
+        </div>
+        <div class="decision-corridor reveal">
+          <div class="decision-panel">
+            <div>
+              <span class="decision-kicker">Launch decision layer</span>
+              <h3>Find the one issue that should stop launch, not fifty warnings to ignore.</h3>
+              <p>Cursor, Claude, Lovable, Bolt, Next.js, Vercel, and Supabase can move an MVP to production quickly. The report focuses on the file paths and boundary failures that matter before real users, billing, or customer data enter the system.</p>
+            </div>
+            <div class="decision-path">
+              <div class="decision-step">
+                <span>Input</span>
+                <strong>Submit the repo</strong>
+                <p>Private review scope, one codebase, launch-blocking security risks.</p>
+              </div>
+              <div class="decision-step">
+                <span>Review</span>
+                <strong>Scan plus manual verification</strong>
+                <p>PreFlight finds candidates, then the top findings are checked by hand.</p>
+              </div>
+              <div class="decision-step">
+                <span>Output</span>
+                <strong>Fix the first real blocker</strong>
+                <p>Exact file path, severity, why it matters, and fix direction.</p>
+              </div>
+            </div>
+            <div class="decision-note">Designed for the moment when a founder or agency needs a yes/no launch answer, not another raw scanner export.</div>
+          </div>
+          <div class="decision-proof">
+            <div class="signal-panel">
+              <h3>Severity signal system</h3>
+              <p>PreFlight does not turn every warning into panic. The report separates hard launch blockers from drift and passing checks.</p>
+              <div class="signal-row">
+                <span class="severity hard-block">Hard Block</span>
+                <p>Red. Stop the launch path until the finding is reviewed or fixed.</p>
+              </div>
+              <div class="signal-row">
+                <span class="severity high-risk">High Risk Drift</span>
+                <p>Yellow. Architecture or policy drift that can become a real boundary failure.</p>
+              </div>
+              <div class="signal-row">
+                <span class="severity pass">Pass</span>
+                <p>Green. The scanned boundary is present, scoped, and safe enough to move on.</p>
+              </div>
+            </div>
+            <div class="audit-chip">
+              <div>
+                <code>supabase/migrations/create_webhook_events.sql</code>
+                <small>Sensitive table without explicit RLS boundary</small>
+              </div>
+              <span class="severity hard-block">Hard Block</span>
+            </div>
+            <div class="audit-chip">
+              <div>
+                <code>app/api/billing/webhook/route.ts</code>
+                <small>Signature and token handling need manual review</small>
+              </div>
+              <span class="severity high-risk">High Risk Drift</span>
+            </div>
+            <div class="audit-chip">
+              <div>
+                <code>app/(dashboard)/layout.tsx</code>
+                <small>Server-only guard present before customer data load</small>
+              </div>
+              <span class="severity pass">Pass</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section compact" id="report">
+      <div class="shell">
+        <div class="chapter-head reveal">
+          <div>
+            <span class="chapter-label">Private report</span>
+            <h2>What lands in your inbox.</h2>
+          </div>
+          <p>A short, private review package built for founders, agencies, and builders who want a verified answer fast without setting up or interpreting a tool themselves.</p>
+        </div>
+        <div class="card big-card reveal">
+          <h3>PreFlight Repo Risk Report includes:</h3>
+          <ul class="deliverable-list">
+            <li>1 repo review</li>
+            <li>1 PreFlight scan</li>
+            <li>Top 5 manually verified findings</li>
+            <li>Exact file paths</li>
+            <li>Severity rating</li>
+            <li>Why it matters</li>
+            <li>Fix direction</li>
+            <li>Delivered in 48-72 hours</li>
+            <li>1 month of PreFlight Pro included</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="report-pricing">
+      <div class="shell">
+        <article class="price-card motion-focus reveal">
+          <div class="grid grid-end">
+            <div class="span-7">
+              <span class="chapter-label">Primary offer</span>
+              <h2>PreFlight Repo Risk Report</h2>
+              <p class="lede">Best for founders, agencies, and devs who want a verified answer fast without setting up or interpreting a tool themselves.</p>
+              <div class="price">$49 <small>global / &#8377;2,999 India</small></div>
+              <div class="hero-actions">
+                <a class="btn btn-primary" href="#top">Order Repo Risk Report</a>
+                <a class="btn" href="#sample">See sample report</a>
+              </div>
+            </div>
+            <div class="span-5">
+              <div class="guarantee">If I do not find at least one useful verified issue, you get refunded.</div>
+              <div class="disclaimer mt-12">This is not a full pentest. It is a focused AI-code security risk review for common launch-blocking mistakes.</div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="checks">
+      <div class="shell">
+        <div class="chapter-head reveal">
+          <div>
+            <span class="chapter-label">Risk domains</span>
+            <h2>What PreFlight checks.</h2>
+          </div>
+          <p>The scanner and manual review focus on the places AI coding agents most often break production architecture.</p>
+        </div>
+        <div class="strip">
+          <article class="card reveal"><span class="pill">Supabase</span><h3>RLS gaps</h3><p>Policies, predicates, and drift between schema and assumptions.</p></article>
+          <article class="card reveal"><span class="pill">Secrets</span><h3>Exposed secrets</h3><p>Service keys, tokens, and env boundaries moving into client-visible code.</p></article>
+          <article class="card reveal"><span class="pill">Next.js</span><h3>Unsafe API routes</h3><p>Handlers that trust client state or expose privileged actions.</p></article>
+          <article class="card reveal"><span class="pill">Boundary</span><h3>Client/server leaks</h3><p>Private data, server actions, and environment assumptions crossing into browser code.</p></article>
+          <article class="card reveal"><span class="pill">Auth</span><h3>Risky auth flows</h3><p>Session, role, callback, and middleware logic that breaks on edge cases.</p></article>
+          <article class="card reveal"><span class="pill">Webhooks</span><h3>Token handling</h3><p>Unverified signatures, raw payload storage, and direct client access risks.</p></article>
+          <article class="card reveal"><span class="pill">Runtime</span><h3>Injection and path risks</h3><p>Dynamic queries, unchecked input, and unsafe server-side path handling.</p></article>
+          <article class="card reveal"><span class="pill">Supply chain</span><h3>Dependency risks</h3><p>Package and workflow risks that can block a clean launch or handoff.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="process">
+      <div class="shell">
+        <div class="chapter-head reveal">
+          <div>
+            <span class="chapter-label">Review workflow</span>
+            <h2>From repo to report in five steps.</h2>
+          </div>
+          <p>The review stays focused: submit the repo, let PreFlight scan it, then receive a short verified report instead of a giant scanner export.</p>
+        </div>
+        <div class="timeline reveal">
+          <div class="step"><div><h3>Submit your repo</h3><p>Share the repo access path needed for the private review.</p></div></div>
+          <div class="step"><div><h3>PreFlight scans it</h3><p>The scanner checks repo structure, Supabase policies, API routes, auth flows, and dependency signals.</p></div></div>
+          <div class="step"><div><h3>I manually verify the top risks</h3><p>The report removes noise and highlights the issues useful to fix before launch.</p></div></div>
+          <div class="step"><div><h3>You receive the private report</h3><p>Each finding includes exact file path, severity, why it matters, and fix direction.</p></div></div>
+          <div class="step"><div><h3>Keep PreFlight running with Pro</h3><p>The report includes 1 month of PreFlight Pro so local protection keeps running after the review.</p></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="audience">
+      <div class="shell audience-grid">
+        <div class="reveal">
+          <span class="chapter-label">Built for</span>
+          <h2>For teams moving from demo to users.</h2>
+          <p class="lede">PreFlight is for fast-shipping repos where AI accelerated the build, but real customers, auth, billing, or tenant data now make security mistakes expensive.</p>
+        </div>
+        <div class="persona-list reveal">
+          <div class="persona"><strong>AI MVP agencies</strong><p>Catch client-facing risks before handoff or launch-week deploys.</p></div>
+          <div class="persona"><strong>SaaS founders</strong><p>Know what to fix before inviting real users or taking payments.</p></div>
+          <div class="persona"><strong>Dev shops</strong><p>Add a lightweight security review to AI-assisted delivery.</p></div>
+          <div class="persona"><strong>Non-technical founders</strong><p>Get a private, readable report without interpreting scanner output.</p></div>
+          <div class="persona"><strong>Vibecoders with users</strong><p>Cursor, Claude, Lovable, Bolt, Vercel, Next.js, and Supabase projects that are past the toy stage.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="sample">
+      <div class="shell">
+        <div class="chapter-head reveal">
+          <div>
+            <span class="chapter-label">Sample report preview</span>
+            <h2>Concrete risk evidence for repo decisions.</h2>
+          </div>
+          <p>Every finding has enough context to decide whether to fix now, investigate, or accept the risk.</p>
+        </div>
+        <div class="sample-report">
+          <div class="finding motion-focus">
+            <span class="severity high-risk">High Risk Drift</span>
+            <h3 class="mt-18">Webhook events table can be queried by authenticated clients.</h3>
+            <div class="report-line"><span class="label">File path</span><p class="file">supabase/migrations/create_webhook_events.sql</p></div>
+            <div class="report-line"><span class="label">Evidence</span><p>The migration creates a table that stores raw webhook payloads but does not enable row level security or add scoped policies.</p></div>
+            <div class="report-line"><span class="label">Why it matters</span><p>Webhook payloads can include customer identifiers, billing metadata, and auth-linked data. A public or weakly scoped table becomes a data boundary failure.</p></div>
+            <div class="report-line"><span class="label">Fix direction</span><p>Enable RLS, add service-role-only insert path, scoped read policies for internal admin use, and block direct client access.</p></div>
+          </div>
+          <div class="reveal">
+            <pre><code><span class="cmd">create table public.webhook_events (</span>
+  id uuid primary key,
+  provider text not null,
+  payload jsonb not null,
+  created_at timestamptz default now()
+);
+
+<span class="bad">-- missing: alter table public.webhook_events enable row level security;</span>
+<span class="warn">-- review: direct client access should not be possible</span></code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="modes">
+      <div class="shell">
+        <div class="chapter-head reveal">
+          <div>
+            <span class="chapter-label">Three product paths</span>
+            <h2>Report first. Product protection after.</h2>
+          </div>
+          <p>The report is the done-for-you offer. The product keeps running locally after the report so the same mistakes do not return.</p>
+        </div>
+        <div class="grid">
+          <article class="card dark-card mode-card span-4 reveal">
+            <span class="severity neutral">CLI-first</span>
+            <h3>The Eye local daemon</h3>
+            <pre><code><span class="cmd">npm install -g preflight-pro</span>
+<span class="cmd">preflight start</span></code></pre>
+            <p>The Eye background daemon watches risky edits, terminal hard-blocks catch dangerous changes, and a native Windows popup fallback keeps warnings visible.</p>
+            <button class="btn btn-dark copy-btn" type="button" data-copy="npm install -g preflight-pro
+preflight start">Copy CLI commands</button>
+          </article>
+          <article class="card dark-card mode-card span-4 reveal">
+            <span class="severity high-risk">IDE-first</span>
+            <h3>VS Code / Cursor Companion</h3>
+            <p>Red squiggles, status bar alerts, IDE popups, and Fix with PreFlight AI surface risk while the developer is still in the editor.</p>
+            <div class="report-line"><span class="label">Status bar</span><p class="file">PreFlight: 2 high - 4 warning - RLS drift</p></div>
+          </article>
+          <article class="card dark-card mode-card span-4 reveal">
+            <span class="severity pass">Agent-first</span>
+            <h3>MCP tools for guarded agents</h3>
+            <pre><code><span class="cmd">preflight install-mcp</span>
+<span class="cmd">preflight mcp</span></code></pre>
+            <p>MCP tools include <code>scan_project</code>, <code>preflight_fix</code>, and <code>audit_dependencies</code> so agents can ask PreFlight before touching sensitive paths.</p>
+            <button class="btn btn-dark copy-btn" type="button" data-copy="preflight install-mcp
+preflight mcp">Copy MCP commands</button>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="starter">
+      <div class="shell grid">
+        <div class="span-7 reveal">
+          <span class="chapter-label">Free starter setup</span>
+          <h2>Run local protection before buying anything.</h2>
+          <p class="lede">Free users get unlimited local scans plus 10 AI fix credits total. It is built for checking repo risk locally before CI, handoff, or production deploy.</p>
+        </div>
+        <div class="span-5 reveal">
+          <pre><code><span class="cmd">$ preflight start</span>
+<span class="ok">The Eye daemon online</span>
+local scans: unlimited
+AI fix credits: 10 total
+IDE alerts: enabled
+MCP scan support: enabled</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="section compact" id="pricing">
+      <div class="shell">
+        <div class="chapter-head reveal">
+          <div>
+            <span class="chapter-label">Product pricing</span>
+            <h2>Keep protection running after the report.</h2>
+          </div>
+          <p>The subscription tiers support ongoing local protection. The Repo Risk Report remains the primary website offer.</p>
+        </div>
+        <div class="grid">
+          <article class="card span-4 reveal">
+            <span class="severity pass">Free / Local Starter</span>
+            <h3>Local scans</h3>
+            <div class="tier-price">$0</div>
+            <ul class="check-list">
+              <li>Unlimited local scans</li>
+              <li>Terminal/editor hard blocks</li>
+              <li>The Eye daemon</li>
+              <li>VS Code Companion alerts</li>
+              <li>MCP scan support</li>
+              <li>10 AI fix credits</li>
+            </ul>
+          </article>
+          <article class="card span-4 reveal featured-tier">
+            <span class="severity neutral">PreFlight Pro</span>
+            <h3>Ongoing local protection</h3>
+            <div class="tier-price">$19<span>/month</span></div>
+            <ul class="check-list">
+              <li>Unlimited local scans</li>
+              <li>Unlimited AI fix credits</li>
+              <li>VS Code Companion</li>
+              <li>MCP integration</li>
+              <li>Personal project usage</li>
+            </ul>
+          </article>
+          <article class="card span-4 reveal">
+            <span class="severity high-risk">PreFlight Team</span>
+            <h3>Shared team guardrails</h3>
+            <div class="tier-price">$49<span>/seat/month</span></div>
+            <ul class="check-list">
+              <li>Everything in Pro</li>
+              <li>Team rule packs</li>
+              <li>Shared config</li>
+              <li>CI/pre-commit workflows</li>
+              <li>Multi-repo usage</li>
+              <li>Team reports and priority support</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="auto-fix">
+      <div class="shell grid">
+        <div class="span-5 reveal">
+          <span class="chapter-label">Auto-fix</span>
+          <h2>Fix direction first. AI remediation second.</h2>
+          <p class="lede">PreFlight AI fix credits are for targeted remediation, not broad rewrite prompts. The system starts from a verified finding and produces a fix path you can review.</p>
+        </div>
+        <div class="span-7 reveal">
+          <pre><code><span class="cmd">$ preflight_fix PF-RLS-014 --mode guarded</span>
+<span class="ok">patch prepared</span>
+review required: yes
+changes: supabase/policies/invoices.sql</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="dashboard-ci">
+      <div class="shell grid">
+        <div class="span-7 reveal">
+          <pre><code><span class="cmd">$ preflight ci --block high</span>
+scan: complete
+critical: 0
+high: 1
+warning: 5
+<span class="bad">blocked: unsafe API route requires review</span>
+file: app/api/admin/users/route.ts</code></pre>
+        </div>
+        <div class="span-5 reveal">
+          <span class="chapter-label">Dashboard and CI</span>
+          <h2>Use team workflows when the repo becomes a shared surface.</h2>
+          <p class="lede">Team usage adds shared rule packs, reports, pre-commit workflows, CI blocking, and multi-repo visibility without abstract reporting surfaces.</p>
+          <ul class="check-list">
+            <li>CI/pre-commit workflows for high-risk changes</li>
+            <li>Team reports for agencies and dev shops</li>
+            <li>Shared config for multiple repos</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="faq">
+      <div class="shell">
+        <div class="chapter-head reveal">
+          <div>
+            <span class="chapter-label">FAQ</span>
+            <h2>Focused, private, and clear about scope.</h2>
+          </div>
+          <p>PreFlight is designed to catch common AI-code security mistakes before launch. It does not pretend to replace a full security program.</p>
+        </div>
+        <div class="reveal">
+          <details open="">
+            <summary>Is this a full pentest?</summary>
+            <p>No. The Repo Risk Report is a focused AI-code security risk review for common launch-blocking mistakes. It is designed to find useful issues quickly, not certify the entire system.</p>
+          </details>
+          <details>
+            <summary>What do I receive?</summary>
+            <p>A short private report with the top 5 manually verified findings, exact file paths, severity, why each issue matters, and fix direction.</p>
+          </details>
+          <details>
+            <summary>What stacks are best suited?</summary>
+            <p>PreFlight is positioned for AI-built Next.js, Supabase, Vercel, Cursor, Lovable, Bolt, and Claude-assisted repos, especially projects moving from MVP to real users.</p>
+          </details>
+          <details>
+            <summary>What if no useful issue is found?</summary>
+            <p>If I do not find at least one useful verified issue, you get refunded.</p>
+          </details>
+          <details>
+            <summary>Can I keep using PreFlight after the report?</summary>
+            <p>Yes. The report includes 1 month of PreFlight Pro, and free users can keep unlimited local scans plus 10 AI fix credits total.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="shell footer-grid">
+      <div>
+        <a class="brand" href="#top">
+          <img class="brand-mark" src="logos/header-img-0.png" alt="" width="38" height="38">
+          <span class="brand-copy">
+            <strong>PreFlight</strong>
+            <span>AI-code security review</span>
+          </span>
+        </a>
+        <p class="tiny footer-note">Founder's Weekend Pass is closed. Early buyers keep lifetime access.</p>
+      </div>
+      <div class="tiny">Repo Risk Report - $49 global / &#8377;2,999 India - delivered in 48-72 hours</div>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      var root = document.documentElement;
+      root.classList.add('js');
+      var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      var themeButton = document.querySelector('.theme-toggle');
+      var themeText = document.querySelector('.theme-toggle-text');
+      var themeIcon = document.querySelector('.theme-toggle-icon');
+      function applyTheme(theme) {
+        var next = theme === 'dark' ? 'dark' : 'light';
+        root.dataset.theme = next;
+        if (themeButton) {
+          var target = next === 'dark' ? 'light' : 'dark';
+          themeButton.setAttribute('aria-label', 'Switch to ' + target + ' mode');
+          themeButton.setAttribute('aria-pressed', String(next === 'dark'));
+        }
+        if (themeText) themeText.textContent = next === 'dark' ? 'Light' : 'Dark';
+        if (themeIcon) themeIcon.textContent = next === 'dark' ? 'L' : 'D';
+      }
+      applyTheme(root.dataset.theme);
+      if (themeButton) {
+        themeButton.addEventListener('click', function () {
+          var next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+          applyTheme(next);
+          try { localStorage.setItem('preflight-theme', next); } catch (error) {}
+        });
+      }
+
+      var copyButtons = Array.prototype.slice.call(document.querySelectorAll('.copy-btn'));
+      copyButtons.forEach(function (button) {
+        button.addEventListener('click', function () {
+          var value = button.getAttribute('data-copy') || '';
+          function done() {
+            var original = button.textContent;
+            button.classList.add('is-copied');
+            button.textContent = 'Copied';
+            window.setTimeout(function () {
+              button.textContent = original;
+              button.classList.remove('is-copied');
+            }, 1200);
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value).then(done, done);
+          } else {
+            done();
+          }
+        });
+      });
+
+      var revealItems = Array.prototype.slice.call(document.querySelectorAll('.reveal'));
+      revealItems.forEach(function (item, index) {
+        item.style.setProperty('--delay', String(index % 4));
+      });
+      var motionFocusItems = Array.prototype.slice.call(document.querySelectorAll('.motion-focus'));
+
+      if (reduceMotion || !('IntersectionObserver' in window)) {
+        revealItems.forEach(function (item) { item.classList.add('is-visible'); });
+        motionFocusItems.forEach(function (item) { item.classList.add('motion-active'); });
+        return;
+      }
+
+      var observer = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-visible');
+            observer.unobserve(entry.target);
+          }
+        });
+      }, { rootMargin: '0px 0px -12% 0px', threshold: 0.12 });
+
+      revealItems.forEach(function (item) { observer.observe(item); });
+
+      var focusObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('motion-active');
+            focusObserver.unobserve(entry.target);
+          }
+        });
+      }, { rootMargin: '0px 0px -18% 0px', threshold: 0.26 });
+
+      motionFocusItems.forEach(function (item) { focusObserver.observe(item); });
+    })();
+  </script>
+
+
+</body></html>
